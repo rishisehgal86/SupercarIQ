@@ -1,0 +1,15 @@
+# Railway Cron Service — Weekly Sentiment Refresh
+# Runs every Sunday at 06:00 UTC
+# Generates fresh influencer sentiment for all active models via LLM
+# and posts results to the /api/scheduled/sentiment endpoint.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "pipeline/Dockerfile"
+
+[deploy]
+# Weekly: every Sunday at 06:00 UTC
+cronSchedule = "0 6 * * 0"
+startCommand = "python3 llm_content_generator.py --mode sentiment --all-models"
+restartPolicyType = "never"
+healthcheckPath = ""

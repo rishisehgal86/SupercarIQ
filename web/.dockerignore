@@ -1,0 +1,14 @@
+node_modules
+.git
+.manus
+.manus-logs
+.webdev
+.env*
+coverage
+dist
+pipeline
+screenshots
+ideas.md
+todo.md
+.prettierrc
+.prettierignore

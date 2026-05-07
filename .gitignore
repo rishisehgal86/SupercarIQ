@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.dist
+
+# Generated files
+*.tsbuildinfo
+coverage/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+drizzle/migrations/*.sql
+
+# Logs
+*.log
+.manus-logs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.Python
+
+# Pipeline specific
+pipeline/queue_*.json
+pipeline/audit_*.json
+pipeline/check_*.py
+pipeline/enrich_*.py
+pipeline/test_*.py
+pipeline/*.bak
+
+# Misc
+*.bak
+.tmp/
+tmp/
+
+# Manus internal files
+web/.manus/
+web/client/public/__manus__/
+web/.gitkeep

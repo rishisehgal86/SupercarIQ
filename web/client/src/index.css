@@ -1,0 +1,300 @@
+/* ============================================================
+   SUPERCARIQ — UK SUPERCAR INVESTMENT INTELLIGENCE
+   Design Philosophy: "Aged Leather & Precision Data"
+   
+   Movement: Precision Brutalism meets Luxury Editorial
+   Core Principles:
+     1. Warm off-white background — Italian paper, Robb Report warmth
+     2. Deep charcoal text for maximum readability
+     3. Cognac / Tobacco as the primary accent — Hodinkee, aged leather
+     4. Sharp edges, no rounded corners on data cards
+     5. Typography: Playfair Display (display) + DM Sans (body) + DM Mono (data)
+   Color Philosophy:
+     - Background: #FAF8F5 (warm cream — like aged Italian paper)
+     - Surface: #FFFFFF / #F5F2EE (layered warmth)
+     - Cognac accent: oklch(0.52 0.14 55) — warm tobacco, aged leather
+     - Cognac dark: oklch(0.38 0.14 50) — deep cognac for hover states
+     - Green signal: #1A7A3C (deep forest green — appreciation / strong buy)
+     - Amber signal: #B45309 (dark amber — caution / consider)
+     - Red signal: #B91C1C (deep red — negative / avoid)
+     - Text primary: #1A1A1A (near-black — maximum readability)
+     - Text muted: #6B6560 (warm mid-grey)
+     - Border: #DDD9D3 (warm light grey)
+   ============================================================ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,600&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+:root {
+  --radius: 3px;
+  /* Warm cream background */
+  --background: oklch(0.975 0.008 75);
+  --foreground: oklch(0.13 0.008 60);
+  /* White card surfaces */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.13 0.008 60);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.13 0.008 60);
+  /* Ferrari Red primary — editorial, authoritative, iconic */
+  --primary: oklch(0.50 0.22 27);
+  --primary-foreground: oklch(0.98 0 0);
+  /* Light warm grey secondary */
+  --secondary: oklch(0.94 0.006 75);
+  --secondary-foreground: oklch(0.25 0.008 60);
+  /* Muted surfaces */
+  --muted: oklch(0.95 0.005 75);
+  --muted-foreground: oklch(0.48 0.012 65);
+  /* Accent = warm secondary */
+  --accent: oklch(0.94 0.006 75);
+  --accent-foreground: oklch(0.13 0.008 60);
+  /* Destructive = deep red (errors only, not brand) */
+  --destructive: oklch(0.45 0.18 27);
+  --destructive-foreground: oklch(0.98 0 0);
+  /* Warm light borders */
+  --border: oklch(0.87 0.010 75);
+  --input: oklch(0.90 0.008 75);
+  --ring: oklch(0.50 0.22 27);
+  /* Charts — cognac primary, then supporting palette */
+  --chart-1: oklch(0.50 0.22 27);   /* Ferrari Red */
+  --chart-2: oklch(0.55 0.18 145);  /* Forest green */
+  --chart-3: oklch(0.50 0.14 220);  /* Slate blue */
+  --chart-4: oklch(0.62 0.14 75);   /* Warm gold */
+  --chart-5: oklch(0.50 0.10 300);  /* Muted purple */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Playfair Display', Georgia, serif;
+    letter-spacing: -0.01em;
+  }
+  code, .mono {
+    font-family: 'DM Mono', 'Courier New', monospace;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href] {
+    @apply cursor-pointer;
+  }
+}
+
+/* ─── Mobile touch improvements ─────────────────────────────── */
+@layer utilities {
+  .touch-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@layer components {
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2.5rem;
+      padding-right: 2.5rem;
+      max-width: 1400px;
+    }
+  }
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  /* Ferrari Red accent line */
+  .gold-line {
+    height: 2px;
+    background: linear-gradient(90deg, oklch(0.50 0.22 27), transparent);
+  }
+
+  /* Data label style */
+  .data-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: oklch(0.48 0.012 65);
+  }
+
+  /* Score badge */
+  .score-badge {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+  }
+
+  /* Verdict pill — semantic colours, independent of primary */
+  .verdict-strong-buy {
+    background: oklch(0.92 0.06 145);
+    color: oklch(0.28 0.14 145);
+    border: 1px solid oklch(0.75 0.12 145);
+  }
+  .verdict-buy {
+    background: oklch(0.94 0.04 145);
+    color: oklch(0.35 0.12 145);
+    border: 1px solid oklch(0.80 0.08 145);
+  }
+  .verdict-consider {
+    background: oklch(0.94 0.05 75);
+    color: oklch(0.38 0.12 75);
+    border: 1px solid oklch(0.78 0.10 75);
+  }
+  .verdict-avoid {
+    background: oklch(0.94 0.06 27);
+    color: oklch(0.35 0.18 27);
+    border: 1px solid oklch(0.75 0.12 27);
+  }
+
+  /* Checklist item */
+  .check-pass {
+    color: oklch(0.35 0.14 145);
+  }
+  .check-fail {
+    color: oklch(0.40 0.18 27);
+  }
+  .check-borderline {
+    color: oklch(0.42 0.14 75);
+  }
+
+  /* Section divider number */
+  .section-number {
+    font-family: 'Playfair Display', serif;
+    font-size: 4rem;
+    font-weight: 900;
+    color: oklch(0.88 0.008 75);
+    line-height: 1;
+    user-select: none;
+  }
+
+  /* Sticky nav — white with subtle shadow */
+  .sticky-nav {
+    background: oklch(1 0 0 / 0.97);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid oklch(0.87 0.010 75);
+    box-shadow: 0 1px 8px oklch(0.13 0.008 60 / 0.06);
+  }
+
+  /* Price variance */
+  .variance-positive {
+    color: oklch(0.35 0.14 145);
+  }
+  .variance-negative {
+    color: oklch(0.40 0.18 27);
+  }
+
+  /* Car card */
+  .car-card {
+    border: 1px solid oklch(0.87 0.010 75);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  }
+  .car-card:hover {
+    border-color: oklch(0.50 0.22 27 / 0.45);
+    box-shadow: 0 4px 20px oklch(0.50 0.22 27 / 0.10);
+    transform: translateY(-2px);
+  }
+  .car-card.rank-1 {
+    border-color: oklch(0.50 0.22 27 / 0.55);
+    box-shadow: 0 0 30px oklch(0.50 0.22 27 / 0.10);
+  }
+
+  /* Score bar animation */
+  @keyframes scoreReveal {
+    from { width: 0%; }
+    to { width: var(--score-width); }
+  }
+  .score-bar-animated {
+    animation: scoreReveal 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+
+  /* Live pulse dot */
+  @keyframes livePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.3); }
+  }
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: oklch(0.50 0.22 27);
+    animation: livePulse 2s ease-in-out infinite;
+    display: inline-block;
+  }
+
+  /* Stat counter */
+  .stat-number {
+    font-family: 'Playfair Display', serif;
+    font-weight: 900;
+    color: oklch(0.50 0.22 27);
+    line-height: 1;
+  }
+
+  /* Top pick highlight strip */
+  .top-pick-strip {
+    background: oklch(0.97 0.008 27);
+    border: 1px solid oklch(0.50 0.22 27 / 0.25);
+    border-left: 3px solid oklch(0.50 0.22 27);
+  }
+
+  /* Sticky intelligence bar */
+  .intel-bar {
+    background: oklch(0.15 0.025 27);
+    color: oklch(0.92 0.008 75);
+  }
+  .intel-bar .intel-accent {
+    color: oklch(0.75 0.18 27);
+  }
+}

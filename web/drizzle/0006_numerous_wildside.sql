@@ -1,0 +1,1 @@
+ALTER TABLE `pipeline_runs` ADD `logFilePath` varchar(512);
