@@ -45,6 +45,7 @@ export default function Login() {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
         setError(data.error ?? (mode === "login" ? "Login failed." : "Registration failed."));
         return;
       }
@@ -68,6 +69,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
+        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2 mb-2">
             <div className="w-1 h-6 bg-primary" />
@@ -77,42 +79,110 @@ export default function Login() {
             {mode === "login" ? "Sign in to your account" : "Create your account"}
           </p>
         </div>
+
         <Card className="border-border bg-card shadow-sm">
           <CardHeader className="pb-4">
-            <CardTitle className="text-base font-semibold">{mode === "login" ? "Welcome back" : "Get started"}</CardTitle>
+            <CardTitle className="text-base font-semibold">
+              {mode === "login" ? "Welcome back" : "Get started"}
+            </CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
-              {mode === "login" ? "Access in-depth supercar investment analysis." : "Create a free account to unlock all reports."}
+              {mode === "login"
+                ? "Access in-depth supercar investment analysis."
+                : "Create a free account to unlock all reports."}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               {mode === "register" && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your name</Label>
-                  <Input id="name" type="text" autoComplete="name" value={name} onChange={e => setName(e.target.value)} placeholder="John Smith" disabled={loading} className="bg-background border-border" />
+                  <Label htmlFor="name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Your name
+                  </Label>
+                  <Input
+                    id="name"
+                    type="text"
+                    autoComplete="name"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="John Smith"
+                    disabled={loading}
+                    className="bg-background border-border"
+                  />
                 </div>
               )}
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email address</Label>
-                <Input id="email" type="email" autoComplete="email" autoFocus={mode === "login"} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required disabled={loading} className="bg-background border-border" />
+                <Label htmlFor="email" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Email address
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  autoFocus={mode === "login"}
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
+                  disabled={loading}
+                  className="bg-background border-border"
+                />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Password</Label>
-                <Input id="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required minLength={8} disabled={loading} className="bg-background border-border" />
-                {mode === "register" && <p className="text-[10px] text-muted-foreground">Minimum 8 characters</p>}
+                <Label htmlFor="password" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Password
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  minLength={8}
+                  disabled={loading}
+                  className="bg-background border-border"
+                />
+                {mode === "register" && (
+                  <p className="text-[10px] text-muted-foreground">Minimum 8 characters</p>
+                )}
               </div>
-              {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
-                {loading ? <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />{mode === "login" ? "Signing in…" : "Creating account…"}</span> : (mode === "login" ? "Sign In" : "Create Account")}
+
+              {error && (
+                <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {mode === "login" ? "Signing in…" : "Creating account…"}
+                  </span>
+                ) : (
+                  mode === "login" ? "Sign In" : "Create Account"
+                )}
               </Button>
             </form>
+
             <div className="mt-4 text-center">
-              <button type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-                {mode === "login" ? "Don’t have an account? Register free" : "Already have an account? Sign in"}
+              <button
+                type="button"
+                onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {mode === "login"
+                  ? "Don't have an account? Register free"
+                  : "Already have an account? Sign in"}
               </button>
             </div>
           </CardContent>
         </Card>
-        <p className="text-center text-[10px] text-muted-foreground mt-6">SupercarIQ · UK Supercar Investment Analysis</p>
+
+        <p className="text-center text-[10px] text-muted-foreground mt-6">
+          SupercarIQ · UK Supercar Investment Analysis
+        </p>
       </div>
     </div>
   );
