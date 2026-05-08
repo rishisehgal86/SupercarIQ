@@ -17,23 +17,45 @@ import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+/** Build a DATABASE_URL from Railway's individual MySQL env vars if DATABASE_URL is not set. */
+function resolveDbUrl(): string | undefined {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  // Railway injects MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+  // when a MySQL service is linked to the web service.
+  const host = process.env.MYSQL_HOST;
+  const port = process.env.MYSQL_PORT ?? '3306';
+  const user = process.env.MYSQL_USER;
+  const pass = process.env.MYSQL_PASSWORD;
+  const db   = process.env.MYSQL_DATABASE;
+  if (host && user && pass && db) {
+    const encoded = encodeURIComponent(pass);
+    const url = `mysql://${user}:${encoded}@${host}:${port}/${db}`;
+    console.log(`[Database] Using Railway MySQL vars → ${host}:${port}/${db}`);
+    return url;
+  }
+  return undefined;
+}
+
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
-    try {
-      // Railway MySQL proxy does not use SSL — ssl_disabled prevents connection drops.
-      // For other environments (Manus TiDB), ssl_disabled is also safe as TiDB
-      // accepts non-SSL connections on the internal network.
-      const pool = createPool({
-        uri: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false },
-        enableKeepAlive: true,
-        waitForConnections: true,
-        connectionLimit: 10,
-      });
-      _db = drizzle(pool);
-    } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
-      _db = null;
+  if (!_db) {
+    const dbUrl = resolveDbUrl();
+    if (dbUrl) {
+      try {
+        // Railway MySQL proxy does not use SSL — ssl_disabled prevents connection drops.
+        // For other environments (Manus TiDB), ssl_disabled is also safe as TiDB
+        // accepts non-SSL connections on the internal network.
+        const pool = createPool({
+          uri: dbUrl,
+          ssl: { rejectUnauthorized: false },
+          enableKeepAlive: true,
+          waitForConnections: true,
+          connectionLimit: 10,
+        });
+        _db = drizzle(pool);
+      } catch (error) {
+        console.warn("[Database] Failed to connect:", error);
+        _db = null;
+      }
     }
   }
   return _db;
