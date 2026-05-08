@@ -281,3 +281,46 @@ def scrape_ferrari_approved_playwright(model_key: str, slug: str | None) -> list
     except Exception as e:
         log.error(f"  FA: fatal error for {model_key}: {e}")
         return []
+
+
+if __name__ == "__main__":
+    """
+    CLI entry point for subprocess isolation.
+    Called by discovery_scraper.py with: --model MODEL_KEY --slug FA_SLUG --json
+    Prints a JSON array to stdout on the last line.
+    """
+    import argparse
+    import os
+    import sys
+    from pathlib import Path
+    from dotenv import load_dotenv
+
+    # Load env (needed for any DB calls, though FA scraper doesn't use DB directly)
+    PIPELINE_DIR = Path(__file__).parent
+    WEBAPP_DIR = PIPELINE_DIR.parent / "ferrari-812-report"
+    for env_path in [WEBAPP_DIR / ".env", PIPELINE_DIR / ".env"]:
+        if env_path.exists():
+            load_dotenv(env_path)
+            break
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        stream=sys.stderr,  # logs to stderr so stdout stays clean for JSON
+    )
+
+    parser = argparse.ArgumentParser(description="Ferrari Approved scraper subprocess")
+    parser.add_argument("--model", required=True, help="Model key (e.g. 812-superfast)")
+    parser.add_argument("--slug", required=True, help="Ferrari Approved URL slug")
+    parser.add_argument("--json", action="store_true", help="Output results as JSON array to stdout")
+    args = parser.parse_args()
+
+    listings = scrape_ferrari_approved_playwright(args.model, args.slug)
+
+    if args.json:
+        import json
+        print(json.dumps(listings))
+    else:
+        for l in listings:
+            print(l)
+    sys.exit(0)

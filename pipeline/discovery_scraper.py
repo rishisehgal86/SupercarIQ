@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import date, datetime
@@ -336,17 +337,58 @@ def _parse_fa_ad(ad: dict, model_key: str) -> dict | None:
 
 def scrape_ferrari_approved(model_key: str, config: dict) -> list[dict]:
     """
-    Scrape all pages of Ferrari Approved UK listings for a given model.
-    Uses Playwright (headless Chromium) to correctly handle Next.js SSR
-    pagination — plain HTTP requests always return the same first-page data.
+    Scrape Ferrari Approved UK listings for a given model.
+
+    Runs fa_playwright_scraper.py as an isolated subprocess with a hard
+    OS-level timeout (120 s per model). This prevents a Playwright hang
+    from freezing the entire discovery run — if Chromium stalls, the
+    subprocess is killed and we continue with Tier 3 (AutoTrader).
+
+    Output contract: the subprocess prints a JSON array to stdout.
     """
     slug = config.get("fa_model_slug")
     if not slug:
         log.info(f"  FA: no slug configured for {model_key} — skipping")
         return []
 
-    from fa_playwright_scraper import scrape_ferrari_approved_playwright
-    return scrape_ferrari_approved_playwright(model_key, slug)
+    script = PIPELINE_DIR / "fa_playwright_scraper.py"
+    cmd = [sys.executable, str(script), "--model", model_key, "--slug", slug, "--json"]
+    log.info(f"  FA: launching subprocess for {model_key} (timeout=120s)")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,          # hard OS-level kill if Playwright hangs
+            cwd=str(PIPELINE_DIR),
+        )
+        if result.returncode != 0:
+            log.warning(f"  FA: subprocess exited {result.returncode} for {model_key}")
+            if result.stderr:
+                log.warning(f"  FA stderr: {result.stderr[-500:]}")
+            return []
+        # Parse JSON output from subprocess stdout
+        stdout = result.stdout.strip()
+        # Find the JSON array — it's the last line that starts with '['
+        json_line = next(
+            (line for line in reversed(stdout.splitlines()) if line.startswith("[")),
+            None,
+        )
+        if not json_line:
+            log.warning(f"  FA: no JSON output from subprocess for {model_key}")
+            return []
+        listings = json.loads(json_line)
+        log.info(f"  FA: subprocess returned {len(listings)} listings for {model_key}")
+        return listings
+    except subprocess.TimeoutExpired:
+        log.error(f"  FA: subprocess timed out (120s) for {model_key} — Playwright likely hung. Skipping.")
+        return []
+    except json.JSONDecodeError as e:
+        log.error(f"  FA: JSON parse error for {model_key}: {e}")
+        return []
+    except Exception as e:
+        log.error(f"  FA: unexpected error for {model_key}: {e}")
+        return []
 
 
 # ── DB operations ─────────────────────────────────────────────────────────────
