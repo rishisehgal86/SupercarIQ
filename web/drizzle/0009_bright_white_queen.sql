@@ -1,0 +1,2 @@
+ALTER TABLE `car_listings` MODIFY COLUMN `status` enum('active','pending_sold','sold','archived') NOT NULL DEFAULT 'active';--> statement-breakpoint
+ALTER TABLE `car_listings` ADD `archivedAt` timestamp;

@@ -546,10 +546,37 @@ def record_price_snapshot(conn, listing_id: str, price: int, change: int):
 
 def mark_absent_listings(conn, model_key: str, seen_ids: set, dry_run: bool = False):
     """
-    For active listings not seen in this scrape, increment consecutiveAbsentDays.
-    After 3 days, mark as pending_sold.
+    Two-step archive flow:
+    1. Active listings absent 3+ consecutive days -> pending_sold
+    2. Pending_sold listings still absent on next run -> archived (with archivedAt timestamp)
+
+    This means a listing goes: active -> pending_sold -> archived across two scrape runs,
+    giving at least one full scrape cycle as a grace period before archiving.
     """
     cur = conn.cursor(dictionary=True)
+
+    # Step 1: Archive any pending_sold listings that are still absent this run
+    cur.execute(
+        "SELECT id, consecutiveAbsentDays FROM car_listings WHERE modelKey = %s AND status = 'pending_sold'",
+        (model_key,)
+    )
+    pending = cur.fetchall()
+
+    archived_count = 0
+    for row in pending:
+        if row["id"] not in seen_ids:
+            # Still absent -- move to archived
+            if not dry_run:
+                cur.execute(
+                    "UPDATE car_listings SET status = 'archived', archivedAt = NOW(), consecutiveAbsentDays = %s WHERE id = %s",
+                    ((row["consecutiveAbsentDays"] or 0) + 1, row["id"])
+                )
+                conn.commit()
+            log.info(f"    ARCHIVED: {row['id']} (confirmed gone)")
+            archived_count += 1
+        # If it reappeared, batch_upsert_listings will reactivate it (status = 'active')
+
+    # Step 2: Mark active listings absent 3+ days as pending_sold
     cur.execute(
         "SELECT id, consecutiveAbsentDays FROM car_listings WHERE modelKey = %s AND status = 'active'",
         (model_key,)
@@ -578,7 +605,7 @@ def mark_absent_listings(conn, model_key: str, seen_ids: set, dry_run: bool = Fa
                     conn.commit()
                 log.info(f"    ABSENT {new_absent}/3: {row['id']}")
 
-    return marked_sold
+    return marked_sold, archived_count
 
 
 def update_market_daily_stats(conn, model_key: str, dry_run: bool = False):
@@ -645,10 +672,10 @@ def run_discovery(model_key: str, config: dict, dry_run: bool = False) -> dict:
 
     if not all_listings:
         log.warning(f"No listings found for {model_key} — skipping DB update")
-        return {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0}
+        return {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0, "archived": 0}
 
     conn = get_conn()
-    stats = {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0}
+    stats = {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0, "archived": 0}
 
     # Filter out listings with no/invalid price
     valid_listings = [l for l in all_listings if l.get("asking_price") and l["asking_price"] >= 5000]
@@ -658,8 +685,10 @@ def run_discovery(model_key: str, config: dict, dry_run: bool = False) -> dict:
     batch_stats = batch_upsert_listings(conn, valid_listings, dry_run=dry_run)
     stats.update(batch_stats)
 
-    # Mark absent listings
-    stats["marked_sold"] = mark_absent_listings(conn, model_key, seen_ids, dry_run=dry_run)
+    # Mark absent listings and archive confirmed-gone listings
+    marked_sold, archived_count = mark_absent_listings(conn, model_key, seen_ids, dry_run=dry_run)
+    stats["marked_sold"] = marked_sold
+    stats["archived"] = archived_count
 
     # Update market stats
     update_market_daily_stats(conn, model_key, dry_run=dry_run)
@@ -667,7 +696,8 @@ def run_discovery(model_key: str, config: dict, dry_run: bool = False) -> dict:
     conn.close()
 
     log.info(f"Results: {stats['new']} new, {stats['updated']} updated, "
-             f"{stats['unchanged']} unchanged, {stats['marked_sold']} marked sold")
+             f"{stats['unchanged']} unchanged, {stats['marked_sold']} marked pending_sold, "
+             f"{stats['archived']} archived")
     return stats
 
 
@@ -679,7 +709,7 @@ def main():
 
     models_to_run = {args.model: MODELS[args.model]} if args.model and args.model in MODELS else MODELS
 
-    total_stats = {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0}
+    total_stats = {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0, "archived": 0}
 
     for model_key, config in models_to_run.items():
         try:
@@ -697,6 +727,7 @@ def main():
     log.info(f"Total: {total_stats['new']} new listings found")
     log.info(f"       {total_stats['updated']} listings updated")
     log.info(f"       {total_stats['marked_sold']} listings marked pending_sold")
+    log.info(f"       {total_stats['archived']} listings archived")
     log.info(f"{'='*60}")
 
     # Print summary for smart_pipeline.py to parse

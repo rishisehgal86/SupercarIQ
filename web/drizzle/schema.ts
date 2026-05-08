@@ -74,14 +74,14 @@ export type InsertNegotiationBrief = typeof negotiationBriefs.$inferInsert;
 
 /**
  * car_listings — master registry. One row per car ever seen, never deleted.
- * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold
+ * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold, archived = fully archived (no longer listed)
  */
 export const carListings = mysqlTable("car_listings", {
   id: varchar("id", { length: 64 }).primaryKey(), // e.g. "812-AT-170683"
   sourceUrl: varchar("sourceUrl", { length: 1024 }).notNull(),
   modelKey: varchar("modelKey", { length: 64 }).notNull(), // e.g. "812-superfast"
   source: varchar("source", { length: 32 }).notNull().default("autotrader"), // "autotrader" | "ferrari-approved"
-  status: mysqlEnum("status", ["active", "pending_sold", "sold"]).notNull().default("active"),
+  status: mysqlEnum("status", ["active", "pending_sold", "sold", "archived"]).notNull().default("active"),
   askingPrice: int("askingPrice").notNull(),
   year: smallint("year"),
   colour: varchar("colour", { length: 128 }),
@@ -89,6 +89,7 @@ export const carListings = mysqlTable("car_listings", {
   firstSeenDate: date("firstSeenDate").notNull(),
   lastSeenDate: date("lastSeenDate").notNull(),
   soldDate: date("soldDate"),
+  archivedAt: timestamp("archivedAt"), // set when status moves to 'archived'
   consecutiveAbsentDays: smallint("consecutiveAbsentDays").notNull().default(0),
   daysOnMarket: int("daysOnMarket"), // calculated on sold
   createdAt: timestamp("createdAt").defaultNow().notNull(),

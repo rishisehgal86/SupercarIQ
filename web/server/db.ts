@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, gte, sql } from "drizzle-orm";
+import { and, eq, desc, asc, gte, sql, or, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool } from "mysql2";
 import {
@@ -259,7 +259,7 @@ export async function getListingById(listingId: string) {
   return { ...rows[0].car_listings, details: rows[0].car_listing_details };
 }
 
-/** Get sold listings for a model (sold archive). */
+/** Get sold/archived listings for a model (sold + archived = full archive). */
 export async function getSoldListingsByModel(modelKey: string, limit = 50) {
   const db = await getDb();
   if (!db) return [];
@@ -267,13 +267,16 @@ export async function getSoldListingsByModel(modelKey: string, limit = 50) {
     .select()
     .from(carListings)
     .leftJoin(carListingDetails, eq(carListings.id, carListingDetails.listingId))
-    .where(and(eq(carListings.modelKey, modelKey), eq(carListings.status, "sold")))
-    .orderBy(desc(carListings.soldDate))
+    .where(and(
+      eq(carListings.modelKey, modelKey),
+      inArray(carListings.status, ["sold", "archived"])
+    ))
+    .orderBy(desc(carListings.archivedAt), desc(carListings.soldDate))
     .limit(limit);
   return rows.map(r => ({ ...r.car_listings, details: r.car_listing_details }));
 }
 
-/** Get all sold listings across all models. */
+/** Get all sold/archived listings across all models. */
 export async function getAllSoldListings(limit = 100) {
   const db = await getDb();
   if (!db) return [];
@@ -281,8 +284,8 @@ export async function getAllSoldListings(limit = 100) {
     .select()
     .from(carListings)
     .leftJoin(carListingDetails, eq(carListings.id, carListingDetails.listingId))
-    .where(eq(carListings.status, "sold"))
-    .orderBy(desc(carListings.soldDate))
+    .where(inArray(carListings.status, ["sold", "archived"]))
+    .orderBy(desc(carListings.archivedAt), desc(carListings.soldDate))
     .limit(limit);
   return rows.map(r => ({ ...r.car_listings, details: r.car_listing_details }));
 }
@@ -444,9 +447,9 @@ export async function getAllLeads(limit = 500) {
 /** Get pipeline status: last N runs + live queue depth from car_listings. */
 export async function getPipelineStatus() {
   const db = await getDb();
-  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0 };
+  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0, archivedListings: 0 };
 
-  const [runs, queueRows, activeRows, pendingSoldRows] = await Promise.all([
+  const [runs, queueRows, activeRows, pendingSoldRows, archivedRows] = await Promise.all([
     // Last 20 pipeline runs
     db.select().from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(20),
     // Queue depth = active listings without enrichment (no iiv set)
@@ -462,6 +465,10 @@ export async function getPipelineStatus() {
     db.select({ count: sql<number>`COUNT(*)` })
       .from(carListings)
       .where(eq(carListings.status, 'pending_sold')),
+    // Archived listings
+    db.select({ count: sql<number>`COUNT(*)` })
+      .from(carListings)
+      .where(eq(carListings.status, 'archived')),
   ]);
 
   return {
@@ -469,6 +476,7 @@ export async function getPipelineStatus() {
     queueDepth: Number(queueRows[0]?.count ?? 0),
     activeListings: Number(activeRows[0]?.count ?? 0),
     pendingSoldListings: Number(pendingSoldRows[0]?.count ?? 0),
+    archivedListings: Number(archivedRows[0]?.count ?? 0),
   };
 }
 

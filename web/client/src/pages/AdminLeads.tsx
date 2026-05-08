@@ -248,8 +248,16 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
               <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
                 Pending Sold
               </div>
-              <div className="font-serif text-2xl font-bold text-foreground">
+              <div className="font-serif text-2xl font-bold text-amber-600">
                 {data.pendingSoldListings}
+              </div>
+            </div>
+            <div className="bg-card px-5 py-4">
+              <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
+                Archived
+              </div>
+              <div className="font-serif text-2xl font-bold text-muted-foreground">
+                {data.archivedListings ?? 0}
               </div>
             </div>
             <div className="bg-card px-5 py-4">
