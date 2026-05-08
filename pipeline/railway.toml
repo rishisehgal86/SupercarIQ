@@ -1,10 +1,11 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "pipeline/Dockerfile"
+# When Root Directory = "pipeline" is set in Railway, Dockerfile is at the root of the build context
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Railway Cron Service — runs 3x daily: 07:00, 13:00, 19:00 UTC
-# Each run: discovery + enrich 3 listings + LLM content generation + TS regeneration
+# Each run: discovery + enrich 3 listings + LLM content generation
 cronSchedule = "0 7,13,19 * * *"
 startCommand = "python3 smart_pipeline.py --phase all --enrich-count 3"
 restartPolicyType = "never"
