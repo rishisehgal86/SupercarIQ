@@ -447,9 +447,9 @@ export async function getAllLeads(limit = 500) {
 /** Get pipeline status: last N runs + live queue depth from car_listings. */
 export async function getPipelineStatus() {
   const db = await getDb();
-  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0, archivedListings: 0 };
+  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0, archivedListings: 0, incompleteDataListings: 0 };
 
-  const [runs, queueRows, activeRows, pendingSoldRows, archivedRows] = await Promise.all([
+  const [runs, queueRows, activeRows, pendingSoldRows, archivedRows, incompleteRows] = await Promise.all([
     // Last 20 pipeline runs
     db.select().from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(20),
     // Queue depth = active listings without enrichment (no iiv set)
@@ -469,6 +469,10 @@ export async function getPipelineStatus() {
     db.select({ count: sql<number>`COUNT(*)` })
       .from(carListings)
       .where(eq(carListings.status, 'archived')),
+    // Incomplete data listings (found but insufficient spec data — hidden from public)
+    db.select({ count: sql<number>`COUNT(*)` })
+      .from(carListings)
+      .where(eq(carListings.status, 'incomplete_data')),
   ]);
 
   return {
@@ -477,6 +481,7 @@ export async function getPipelineStatus() {
     activeListings: Number(activeRows[0]?.count ?? 0),
     pendingSoldListings: Number(pendingSoldRows[0]?.count ?? 0),
     archivedListings: Number(archivedRows[0]?.count ?? 0),
+    incompleteDataListings: Number(incompleteRows[0]?.count ?? 0),
   };
 }
 

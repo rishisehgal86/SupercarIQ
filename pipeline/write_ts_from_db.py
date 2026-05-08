@@ -562,11 +562,14 @@ def main():
         log.info(f"Processing model: {model_key}")
 
         # Fetch all listings for this model
+        # Exclude incomplete_data listings — they are hidden from the public site
+        # until they can be successfully re-enriched with real dealer data.
         cur.execute("""
             SELECT l.*, d.*
             FROM car_listings l
             LEFT JOIN car_listing_details d ON d.listingId = l.id
             WHERE l.modelKey = %s
+              AND l.status != 'incomplete_data'
             ORDER BY d.totalScore DESC, l.askingPrice ASC
         """, (model_key,))
         rows = cur.fetchall()

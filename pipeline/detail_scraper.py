@@ -558,6 +558,33 @@ def score_car(spec: dict, listing: dict, model_key: str) -> dict:
     }
 
 
+# ── Dealer registry integration ─────────────────────────────────────────────
+try:
+    from dealer_registry import DEALER_REGISTRY
+except ImportError:
+    DEALER_REGISTRY = {}
+
+
+def get_dealer_url_from_registry(dealer_name: str) -> str | None:
+    """
+    Look up a dealer's direct website URL from the registry.
+    Matches on normalised dealer name (case-insensitive, strips punctuation).
+    Returns the stock_url if found, else None.
+    """
+    if not dealer_name:
+        return None
+    norm = dealer_name.lower().strip()
+    for key, config in DEALER_REGISTRY.items():
+        reg_name = config.get("name", key).lower()
+        # Exact or substring match
+        if norm in reg_name or reg_name in norm:
+            stock_url = config.get("stock_url")
+            if stock_url:
+                log.info(f"  Registry match: '{dealer_name}' → {stock_url}")
+                return stock_url
+    return None
+
+
 # ── Page content extraction ───────────────────────────────────────────────────
 def extract_text_from_html(html: str) -> str:
     """Extract readable text from HTML, removing scripts and styles."""
@@ -616,6 +643,47 @@ def find_dealer_url_in_html(html: str) -> str | None:
     return None
 
 
+# ── Incomplete data gate ─────────────────────────────────────────────────────
+INCOMPLETE_DATA_REASONS = [
+    # (condition_fn, reason_string)
+    # All conditions must be True for the listing to be marked incomplete
+]
+
+def is_incomplete_spec(spec: dict, dealer_page_fetched: bool) -> tuple[bool, str]:
+    """
+    Determine if a spec extraction result is too poor to display publicly.
+    Returns (is_incomplete, reason).
+
+    A listing is considered incomplete if ALL of the following are true:
+      - data_confidence is 'estimated' (LLM couldn't find real data)
+      - equipment_list is empty (no options extracted)
+      - no dealer page was successfully fetched
+
+    The rationale: if we have at least one of (dealer page, equipment list, high confidence)
+    then we have enough to show the listing. If we have none, it's just a skeleton.
+    """
+    confidence = spec.get("data_confidence", "estimated")
+    equipment = spec.get("equipment_list") or []
+    has_dealer = bool(spec.get("dealer") and spec["dealer"].strip())
+
+    if confidence == "estimated" and len(equipment) == 0 and not dealer_page_fetched:
+        return True, f"estimated confidence, no equipment, no dealer page"
+    if confidence == "estimated" and not has_dealer and not dealer_page_fetched:
+        return True, f"estimated confidence, no dealer name, no dealer page"
+    return False, ""
+
+
+def mark_listing_incomplete(conn, listing_id: str, reason: str) -> None:
+    """Mark a listing as incomplete_data in car_listings."""
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE car_listings SET status = 'incomplete_data', updatedAt = NOW() WHERE id = %s",
+        (listing_id,)
+    )
+    conn.commit()
+    log.warning(f"  Marked {listing_id} as incomplete_data: {reason}")
+
+
 # ── Main enrichment function ──────────────────────────────────────────────────
 def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
     """Enrich a single listing. Returns True on success."""
@@ -632,7 +700,8 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
 
     model_key = listing["modelKey"]
     source_url = listing["sourceUrl"]
-    log.info(f"Enriching {listing_id} ({model_key}) — {source_url}")
+    source = listing.get("source", "autotrader")
+    log.info(f"Enriching {listing_id} ({model_key}) source={source} — {source_url}")
 
     # Step 1: Fetch the source listing page
     log.info(f"  Fetching source page: {source_url}")
@@ -645,18 +714,53 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
     source_text = extract_text_from_html(source_html)
     source_images = extract_images_from_html(source_html, source_url)
 
-    # Step 2: Try to find and fetch dealer website
-    dealer_url = find_dealer_url_in_html(source_html)
+    # Step 2: Find and fetch dealer website
+    # Priority order:
+    #   1. Dealer registry lookup by dealer name extracted from source HTML (most reliable)
+    #   2. Direct URL from source HTML (AutoTrader "visit dealer" link)
+    #   3. For specialist-dealer source: the source_url IS the dealer page
+    dealer_url = None
     dealer_text = None
     dealer_images = []
-    if dealer_url:
-        log.info(f"  Fetching dealer page: {dealer_url}")
-        time.sleep(3)  # Polite delay
-        dealer_html = fetch_page(dealer_url)
-        if dealer_html:
-            dealer_text = extract_text_from_html(dealer_html)
-            dealer_images = extract_images_from_html(dealer_html, dealer_url)
-            log.info(f"  Dealer page fetched ({len(dealer_images)} images)")
+    dealer_page_fetched = False
+
+    if source == "specialist-dealer":
+        # The source URL is already the dealer's own page — use it directly
+        dealer_text = source_text
+        dealer_images = source_images
+        dealer_page_fetched = True
+        log.info(f"  Specialist dealer source — using source page as dealer page")
+    else:
+        # Try registry lookup first (more reliable than parsing AT HTML)
+        # Quick pass: extract dealer name from source text with a simple regex
+        dealer_name_match = re.search(
+            r'(?:dealer|sold by|listed by)[:\s]+([A-Z][\w\s&]+?)(?:\n|\.|,|\|)',
+            source_text, re.IGNORECASE
+        )
+        if dealer_name_match:
+            candidate = dealer_name_match.group(1).strip()
+            registry_url = get_dealer_url_from_registry(candidate)
+            if registry_url:
+                dealer_url = registry_url
+                log.info(f"  Registry lookup: '{candidate}' → {dealer_url}")
+
+        # Fall back to HTML link extraction
+        if not dealer_url:
+            dealer_url = find_dealer_url_in_html(source_html)
+            if dealer_url:
+                log.info(f"  HTML link extraction: {dealer_url}")
+
+        if dealer_url:
+            log.info(f"  Fetching dealer page: {dealer_url}")
+            time.sleep(3)  # Polite delay
+            dealer_html = fetch_page(dealer_url)
+            if dealer_html:
+                dealer_text = extract_text_from_html(dealer_html)
+                dealer_images = extract_images_from_html(dealer_html, dealer_url)
+                dealer_page_fetched = True
+                log.info(f"  Dealer page fetched ({len(dealer_images)} images)")
+            else:
+                log.warning(f"  Dealer page fetch failed: {dealer_url}")
 
     # Combine images (dealer images first as they're usually better quality)
     all_images = dealer_images + [img for img in source_images if img not in dealer_images]
@@ -701,6 +805,19 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
     merged_images = list(dict.fromkeys(llm_images + all_images))[:15]
     spec["images"] = merged_images
 
+    # Step 3b: Incomplete data gate
+    # If we couldn't get real spec data, mark the listing as incomplete_data
+    # and skip writing to car_listing_details. The listing will be hidden from
+    # the public site until it can be re-enriched.
+    incomplete, reason = is_incomplete_spec(spec, dealer_page_fetched)
+    if incomplete:
+        if dry_run:
+            log.info(f"  [DRY RUN] Would mark as incomplete_data: {reason}")
+        else:
+            mark_listing_incomplete(conn, listing_id, reason)
+        conn.close()
+        return False  # Return False so the caller knows enrichment was not completed
+
     # Step 4: Score the car
     log.info(f"  Scoring car...")
     scoring = score_car(spec, listing, model_key)
@@ -710,6 +827,7 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
         log.info(f"    Score: {scoring['total_score']}, IIV: £{scoring['iiv']:,}, Verdict: {scoring['investment_verdict']}")
         log.info(f"    Dealer: {spec.get('dealer')}, Type: {spec.get('dealer_type')}")
         log.info(f"    Images: {len(merged_images)}, Equipment: {len(spec.get('equipment_list', []))}")
+        log.info(f"    Data confidence: {spec.get('data_confidence')}, Dealer page: {dealer_page_fetched}")
         conn.close()
         return True
 

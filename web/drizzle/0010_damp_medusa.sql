@@ -1,0 +1,1 @@
+ALTER TABLE `car_listings` MODIFY COLUMN `status` enum('active','pending_sold','sold','archived','incomplete_data') NOT NULL DEFAULT 'active';

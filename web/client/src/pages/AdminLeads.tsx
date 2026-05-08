@@ -227,7 +227,7 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
       ) : (
         <>
           {/* Summary stat cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border border-b border-border">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-px bg-border border-b border-border">
             <div className="bg-card px-5 py-4">
               <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
                 Active Listings
@@ -258,6 +258,16 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
               </div>
               <div className="font-serif text-2xl font-bold text-muted-foreground">
                 {data.archivedListings ?? 0}
+              </div>
+            </div>
+            <div className="bg-card px-5 py-4">
+              <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
+                Incomplete Data
+              </div>
+              <div className={`font-serif text-2xl font-bold ${
+                (data.incompleteDataListings ?? 0) > 0 ? "text-red-500" : "text-emerald-600"
+              }`}>
+                {data.incompleteDataListings ?? 0}
               </div>
             </div>
             <div className="bg-card px-5 py-4">

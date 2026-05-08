@@ -74,14 +74,14 @@ export type InsertNegotiationBrief = typeof negotiationBriefs.$inferInsert;
 
 /**
  * car_listings — master registry. One row per car ever seen, never deleted.
- * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold, archived = fully archived (no longer listed)
+ * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold, archived = fully archived (no longer listed), incomplete_data = listing found but insufficient spec data to display publicly
  */
 export const carListings = mysqlTable("car_listings", {
   id: varchar("id", { length: 64 }).primaryKey(), // e.g. "812-AT-170683"
   sourceUrl: varchar("sourceUrl", { length: 1024 }).notNull(),
   modelKey: varchar("modelKey", { length: 64 }).notNull(), // e.g. "812-superfast"
   source: varchar("source", { length: 32 }).notNull().default("autotrader"), // "autotrader" | "ferrari-approved"
-  status: mysqlEnum("status", ["active", "pending_sold", "sold", "archived"]).notNull().default("active"),
+  status: mysqlEnum("status", ["active", "pending_sold", "sold", "archived", "incomplete_data"]).notNull().default("active"),
   askingPrice: int("askingPrice").notNull(),
   year: smallint("year"),
   colour: varchar("colour", { length: 128 }),

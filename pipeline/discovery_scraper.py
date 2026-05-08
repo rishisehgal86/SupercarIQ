@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
-"""
-discovery_scraper.py — Phase 1 of the Ferrari pipeline.
+""""discovery_scraper.py — Phase 1 of the SupercarIQ pipeline.
 
-Scrapes AutoTrader UK and Ferrari Approved (preowned.ferrari.com) search pages
-for each tracked model. Inserts new listings into car_listings, marks absent
-listings as pending_sold after 3 consecutive absent days, and records price
-changes in car_price_snapshots_v2.
+Three-tier discovery for all models in model_registry.py:
 
-Models tracked (modelKey → AutoTrader search URL):
-  812-superfast, 812-gts, f8-tributo, 458-italia, 488-gtb,
-  california-t, portofino, roma
+  Tier 1 (PRIMARY)   — Independent specialist dealers scraped directly.
+                        Uses specialist_dealer_scraper.py + dealer_registry.py.
+                        Source = 'specialist-dealer'. Highest trust.
+
+  Tier 2 (OFFICIAL)  — Ferrari Approved / Lamborghini Approved portals.
+                        Source = 'ferrari-approved'. High trust.
+
+  Tier 3 (FALLBACK)  — AutoTrader UK, used ONLY to catch listings from
+                        dealers not already in the registry.
+                        Deduplicated against Tiers 1 & 2 by fingerprint.
+                        Source = 'autotrader'. Lower trust.
+
+Deduplication key: (model_key, year, mileage_bucket_500mi, price_bucket_5k)
+  Tier 1 wins over Tier 2 wins over Tier 3.
+  AutoTrader listings are dropped if a matching fingerprint already exists.
+
+Adding a new model: add ONE ModelSpec to model_registry.py — nothing else needed.
+Adding a new dealer: add ONE entry to dealer_registry.py — nothing else needed.
 
 Usage:
   python3 discovery_scraper.py [--dry-run] [--model MODEL_KEY]
@@ -55,111 +66,25 @@ if not log.handlers:
     )
 
 # ── Model registry ────────────────────────────────────────────────────────────
-# AutoTrader search parameters for each model
+# Import from model_registry — single source of truth for all models.
+# The local MODELS dict is kept only as a compatibility shim for legacy code
+# that reads config["label"] / config["fa_model_slug"] etc.
+from model_registry import MODEL_REGISTRY, get_model
+from specialist_dealer_scraper import scrape_all_specialist_dealers
+
+# Build MODELS from MODEL_REGISTRY for backward compatibility
 MODELS = {
-    "812-superfast": {
-        "label": "Ferrari 812 Superfast",
-        "at_make": "Ferrari",
-        "at_model": "812 Superfast",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=812+Superfast&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "812-superfast",
-        "year_min": 2017,
-        "year_max": 2023,
-    },
-    "812-gts": {
-        "label": "Ferrari 812 GTS",
-        "at_make": "Ferrari",
-        "at_model": "812 GTS",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=812+GTS&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "812-gts",
-        "year_min": 2020,
-        "year_max": 2023,
-    },
-    "f8-tributo": {
-        "label": "Ferrari F8 Tributo",
-        "at_make": "Ferrari",
-        "at_model": "F8 Tributo",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=F8+Tributo&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "f8-tributo",
-        "year_min": 2019,
-        "year_max": 2024,
-    },
-    "458-italia": {
-        "label": "Ferrari 458 Italia",
-        "at_make": "Ferrari",
-        "at_model": "458 Italia",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=458+Italia&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "458-italia",
-        "year_min": 2009,
-        "year_max": 2015,
-    },
-    "488-gtb": {
-        "label": "Ferrari 488 GTB",
-        "at_make": "Ferrari",
-        "at_model": "488 GTB",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=488+GTB&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "488-gtb",
-        "year_min": 2015,
-        "year_max": 2020,
-    },
-    "california-t": {
-        "label": "Ferrari California T",
-        "at_make": "Ferrari",
-        "at_model": "California T",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=California+T&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": None,
-        "year_min": 2014,
-        "year_max": 2018,
-    },
-    "portofino": {
-        "label": "Ferrari Portofino",
-        "at_make": "Ferrari",
-        "at_model": "Portofino",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=Portofino&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "portofino",
-        "year_min": 2017,
-        "year_max": 2022,
-    },
-    "roma": {
-        "label": "Ferrari Roma",
-        "at_make": "Ferrari",
-        "at_model": "Roma",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=Roma&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "roma",
-        "year_min": 2020,
-        "year_max": 2025,
-    },
-    # ── New launch models ──────────────────────────────────────────────────────────────────────
-    "488-pista": {
-        "label": "Ferrari 488 Pista",
-        "at_make": "Ferrari",
-        "at_model": "488 Pista",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=488+Pista&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "488-pista",
-        "year_min": 2018,
-        "year_max": 2020,
-    },
-    "sf90-stradale": {
-        "label": "Ferrari SF90 Stradale",
-        "at_make": "Ferrari",
-        "at_model": "SF90 Stradale",
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Ferrari&model=SF90+Stradale&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc",
-        "fa_model_slug": "sf90-stradale",
-        "year_min": 2020,
-        "year_max": 2025,
-    },
-    "huracan-sto": {
-        "label": "Lamborghini Huracán STO",
-        "at_make": "Lamborghini",
-        "at_model": "Huracan",
-        # AT uses 'Huracan' without accent; filter by year+price in enrichment
-        "at_search_url": "https://www.autotrader.co.uk/car-search?make=Lamborghini&model=Huracan&postcode=SW1A+1AA&radius=1500&include-delivery-option=on&sort=price-asc&year-from=2021&year-to=2024",
-        # Lamborghini Approved portal (lamborghini.com/en-EN/certified-pre-owned)
-        "fa_model_slug": None,  # No direct FA equivalent; use specialist dealers
-        "loa_search_url": "https://www.lamborghini.com/en-EN/certified-pre-owned?model=huracan-sto&country=GB",
-        "year_min": 2021,
-        "year_max": 2024,
-    },
+    key: {
+        "label": spec.label,
+        "at_make": spec.make,
+        "at_model": spec.at_model,
+        "at_search_url": spec.at_search_url,
+        "fa_model_slug": spec.fa_slug,
+        "loa_search_url": spec.loa_search_url,
+        "year_min": spec.year_min,
+        "year_max": spec.year_max,
+    }
+    for key, spec in MODEL_REGISTRY.items()
 }
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -657,28 +582,138 @@ def update_market_daily_stats(conn, model_key: str, dry_run: bool = False):
     log.info(f"  Market stats: {active_count} active, avg £{int(avg_price or 0):,}, {new_today} new today")
 
 
+# ── Deduplication helpers ─────────────────────────────────────────────────────
+
+def _fingerprint(listing: dict) -> tuple:
+    """
+    Build a deduplication fingerprint for a listing.
+    Two listings with the same fingerprint are considered the same physical car.
+
+    Key: (model_key, year, mileage_bucket_500mi, price_bucket_5k)
+    Buckets reduce sensitivity to minor differences between sources.
+    None values are treated as wildcards — a listing with no mileage/price will
+    only match another listing that ALSO has no mileage/price.
+    """
+    model_key = listing.get("model_key") or listing.get("id", "").split("-")[0]
+    year = listing.get("year")
+    mileage = listing.get("mileage")
+    price = listing.get("asking_price") or listing.get("price")
+
+    mileage_bucket = (int(mileage) // 500) if mileage else None
+    price_bucket = (int(price) // 10000) if price else None  # £10k buckets for aggressive dedup
+
+    return (model_key, year, mileage_bucket, price_bucket)
+
+
+def _source_priority(source: str) -> int:
+    """Lower number = higher priority (wins dedup)."""
+    return {"specialist-dealer": 0, "ferrari-approved": 1, "autotrader": 2}.get(source, 99)
+
+
+def deduplicate_listings(all_listings: list[dict]) -> list[dict]:
+    """
+    Deduplicate listings across tiers.
+    When two listings share the same fingerprint, the one with the lower
+    source priority wins (specialist-dealer > ferrari-approved > autotrader).
+    """
+    seen_fingerprints: dict[tuple, dict] = {}
+    for listing in all_listings:
+        fp = _fingerprint(listing)
+        # Fingerprints with all-None components are too vague — keep all
+        if fp == (listing.get("model_key"), None, None, None):
+            # No year/mileage/price — can't deduplicate meaningfully
+            key = listing.get("id", id(listing))
+            seen_fingerprints[key] = listing
+            continue
+        existing = seen_fingerprints.get(fp)
+        if existing is None:
+            seen_fingerprints[fp] = listing
+        else:
+            # Keep the higher-priority source
+            existing_prio = _source_priority(existing.get("source", ""))
+            new_prio = _source_priority(listing.get("source", ""))
+            if new_prio < existing_prio:
+                seen_fingerprints[fp] = listing
+                log.debug(f"  DEDUP: {listing['source']} wins over {existing['source']} "
+                          f"for fingerprint {fp}")
+            else:
+                log.debug(f"  DEDUP: keeping {existing['source']} over {listing['source']} "
+                          f"for fingerprint {fp}")
+    return list(seen_fingerprints.values())
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def run_discovery(model_key: str, config: dict, dry_run: bool = False) -> dict:
-    """Run discovery for a single model. Returns stats dict."""
+    """
+    Three-tier discovery for a single model:
+      Tier 1: Specialist dealers (direct scrape)
+      Tier 2: Ferrari/Lamborghini Approved portal
+      Tier 3: AutoTrader (fallback only — deduplicated against Tiers 1+2)
+    """
     log.info(f"\n{'='*60}")
     log.info(f"Discovery: {config['label']} ({model_key})")
     log.info(f"{'='*60}")
 
-    # Scrape Ferrari Approved only (AutoTrader removed — blocked by bot detection)
-    fa_listings = scrape_ferrari_approved(model_key, config)
+    # ── Tier 1: Specialist dealers ────────────────────────────────────────────
+    log.info("[Tier 1] Specialist dealer direct scrape...")
+    try:
+        specialist_listings = scrape_all_specialist_dealers(model_key)
+    except Exception as e:
+        log.error(f"  Tier 1 failed: {e}")
+        specialist_listings = []
 
-    all_listings = fa_listings
-    log.info(f"Total found: {len(all_listings)} (FA: {len(fa_listings)})")
+    # Normalise specialist listing IDs to match batch_upsert format
+    for l in specialist_listings:
+        if "listing_id" in l and "id" not in l:
+            l["id"] = l["listing_id"]
 
-    if not all_listings:
+    log.info(f"  Tier 1: {len(specialist_listings)} specialist dealer listings")
+
+    # ── Tier 2: Ferrari/Lamborghini Approved ──────────────────────────────────
+    log.info("[Tier 2] Official approved portal scrape...")
+    try:
+        fa_listings = scrape_ferrari_approved(model_key, config)
+    except Exception as e:
+        log.error(f"  Tier 2 failed: {e}")
+        fa_listings = []
+    log.info(f"  Tier 2: {len(fa_listings)} approved portal listings")
+
+    # ── Tier 3: AutoTrader fallback ───────────────────────────────────────────
+    # Only run AT if the model has an AT search URL configured
+    at_listings = []
+    if config.get("at_search_url"):
+        log.info("[Tier 3] AutoTrader fallback scrape...")
+        try:
+            at_listings = scrape_autotrader(model_key, config)
+        except Exception as e:
+            log.error(f"  Tier 3 failed: {e}")
+            at_listings = []
+        log.info(f"  Tier 3: {len(at_listings)} AutoTrader listings (before dedup)")
+    else:
+        log.info("[Tier 3] AutoTrader: no URL configured — skipping")
+
+    # ── Deduplication ─────────────────────────────────────────────────────────
+    # Merge all tiers; specialist-dealer wins over FA wins over AutoTrader
+    all_listings = specialist_listings + fa_listings + at_listings
+    deduped = deduplicate_listings(all_listings)
+
+    at_dropped = len(at_listings) - sum(1 for l in deduped if l.get("source") == "autotrader")
+    log.info(f"Total after dedup: {len(deduped)} "
+             f"(specialist: {sum(1 for l in deduped if l.get('source') == 'specialist-dealer')}, "
+             f"FA: {sum(1 for l in deduped if l.get('source') == 'ferrari-approved')}, "
+             f"AT: {sum(1 for l in deduped if l.get('source') == 'autotrader')}, "
+             f"AT dropped by dedup: {at_dropped})")
+
+    if not deduped:
         log.warning(f"No listings found for {model_key} — skipping DB update")
         return {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0, "archived": 0}
 
     conn = get_conn()
     stats = {"new": 0, "updated": 0, "unchanged": 0, "marked_sold": 0, "archived": 0}
 
-    # Filter out listings with no/invalid price
-    valid_listings = [l for l in all_listings if l.get("asking_price") and l["asking_price"] >= 5000]
+    # Filter out listings with no/invalid price (specialist listings may have None price
+    # — they are still inserted; enrichment will fill in the price later)
+    valid_listings = [l for l in deduped if l.get("id")]
     seen_ids = {l["id"] for l in valid_listings}
 
     # Batch upsert all listings in a single DB round-trip
