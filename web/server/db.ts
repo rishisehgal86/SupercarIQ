@@ -17,16 +17,20 @@ import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
-/** Build a DATABASE_URL from Railway's individual MySQL env vars if DATABASE_URL is not set. */
+/** Build a DATABASE_URL from Railway's individual MySQL env vars if DATABASE_URL is not set.
+ *  Railway uses two naming styles:
+ *    - MYSQLHOST, MYSQLPORT, MYSQLUSER, MYSQLPASSWORD  (no underscore between words)
+ *    - MYSQL_DATABASE                                   (with underscore)
+ *  We check both styles for maximum compatibility.
+ */
 function resolveDbUrl(): string | undefined {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  // Railway injects MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-  // when a MySQL service is linked to the web service.
-  const host = process.env.MYSQL_HOST;
-  const port = process.env.MYSQL_PORT ?? '3306';
-  const user = process.env.MYSQL_USER;
-  const pass = process.env.MYSQL_PASSWORD;
-  const db   = process.env.MYSQL_DATABASE;
+  // Support both MYSQLHOST (Railway style) and MYSQL_HOST (standard style)
+  const host = process.env.MYSQLHOST      ?? process.env.MYSQL_HOST;
+  const port = process.env.MYSQLPORT      ?? process.env.MYSQL_PORT      ?? '3306';
+  const user = process.env.MYSQLUSER      ?? process.env.MYSQL_USER;
+  const pass = process.env.MYSQLPASSWORD  ?? process.env.MYSQL_PASSWORD;
+  const db   = process.env.MYSQL_DATABASE ?? process.env.MYSQLDATABASE;
   if (host && user && pass && db) {
     const encoded = encodeURIComponent(pass);
     const url = `mysql://${user}:${encoded}@${host}:${port}/${db}`;
