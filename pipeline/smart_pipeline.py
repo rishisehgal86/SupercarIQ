@@ -80,14 +80,46 @@ def get_conn():
     return mysql.connector.connect(**kwargs, ssl_disabled=False)
 
 def run_cmd(cmd, cwd=None, timeout=300, env=None):
-    """Run a shell command and return (returncode, stdout, stderr)."""
+    """
+    Run a shell command and return (returncode, stdout, stderr).
+
+    Uses a temp file for stdout/stderr to avoid pipe buffer deadlocks when
+    child processes (e.g. discovery_scraper) spawn their own subprocesses
+    (e.g. fa_playwright_scraper). With capture_output=True the pipe buffer
+    fills up and causes a deadlock — writing to a file avoids this entirely.
+    """
     import subprocess
-    result = subprocess.run(
-        cmd, shell=True, capture_output=True, text=True,
-        cwd=cwd or PIPELINE_DIR, timeout=timeout,
-        env={**os.environ, **(env or {})}
-    )
-    return result.returncode, result.stdout, result.stderr
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w+', suffix='_out.txt', delete=False) as out_f, \
+         tempfile.NamedTemporaryFile(mode='w+', suffix='_err.txt', delete=False) as err_f:
+        out_path, err_path = out_f.name, err_f.name
+
+    try:
+        proc = subprocess.Popen(
+            cmd, shell=True, stdout=open(out_path, 'w'), stderr=open(err_path, 'w'),
+            cwd=cwd or PIPELINE_DIR,
+            env={**os.environ, **(env or {})},
+            text=True,
+        )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+        rc = proc.returncode
+        with open(out_path) as f:
+            stdout = f.read()
+        with open(err_path) as f:
+            stderr = f.read()
+        return rc, stdout, stderr
+    finally:
+        import os as _os
+        for p in (out_path, err_path):
+            try:
+                _os.unlink(p)
+            except Exception:
+                pass
 
 # ── Queue management ──────────────────────────────────────────────────────────
 def ensure_queue_table():

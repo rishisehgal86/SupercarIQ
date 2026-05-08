@@ -37,6 +37,13 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+# Playwright is used as fallback when HTTP is blocked (403, SSL errors, JS-rendered pages)
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
 from model_registry import MODEL_REGISTRY, ModelSpec, get_model
 from dealer_registry import DEALER_REGISTRY, get_romans_stock_url
 
@@ -59,21 +66,97 @@ HEADERS = {
 REQUEST_DELAY = 3.0  # seconds between requests
 
 
-def fetch_page(url: str, retries: int = 3, delay: float = REQUEST_DELAY) -> Optional[str]:
-    """Fetch a page with retry logic and polite delays."""
+def _fetch_with_playwright(url: str, timeout_ms: int = 30_000, extra_wait_ms: int = 0) -> Optional[str]:
+    """Fetch a page using a headless Chromium browser. Bypasses bot detection and handles JS rendering.
+    extra_wait_ms: additional milliseconds to wait after page load (for JS-heavy DMS sites like Dragon2000).
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        logger.warning("Playwright not available — cannot use browser fetch")
+        return None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=[
+                "--no-sandbox", "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+            ])
+            ctx = browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="en-GB",
+                viewport={"width": 1280, "height": 800},
+            )
+            page = ctx.new_page()
+            page.set_extra_http_headers({k: v for k, v in HEADERS.items() if k != "User-Agent"})
+            page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+            # Wait briefly for any lazy-loaded content
+            try:
+                page.wait_for_load_state("networkidle", timeout=5_000)
+            except Exception:
+                pass
+            # Extra wait for JS-heavy DMS sites (Dragon2000 etc.)
+            if extra_wait_ms > 0:
+                page.wait_for_timeout(extra_wait_ms)
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        logger.warning(f"Playwright fetch failed for {url}: {type(e).__name__}: {str(e)[:120]}")
+        return None
+
+
+def fetch_page(
+    url: str,
+    retries: int = 2,
+    delay: float = REQUEST_DELAY,
+    force_playwright: bool = False,
+    playwright_wait_ms: int = 0,
+) -> Optional[str]:
+    """
+    Fetch a page with smart fallback:
+    1. If force_playwright=True, go straight to headless browser.
+    2. Otherwise try HTTP first (fast). On 403 / SSL error / connection error,
+       automatically fall back to Playwright headless browser.
+    Max 2 HTTP attempts, then 1 Playwright attempt.
+    playwright_wait_ms: extra wait after page load (for Dragon2000/JS-heavy DMS sites).
+    """
+    if force_playwright:
+        logger.debug(f"Playwright-forced fetch: {url}")
+        return _fetch_with_playwright(url, extra_wait_ms=playwright_wait_ms)
+
+    last_status = None
+    use_playwright_fallback = False
+
     for attempt in range(retries):
         try:
-            time.sleep(delay + (attempt * 2))
-            resp = requests.get(url, headers=HEADERS, timeout=30, allow_redirects=True)
+            time.sleep(delay if attempt == 0 else delay + 4)
+            resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True, verify=True)
             if resp.status_code == 200:
                 return resp.text
+            elif resp.status_code == 403:
+                logger.debug(f"HTTP 403 for {url} — will try Playwright")
+                use_playwright_fallback = True
+                break
             elif resp.status_code == 429:
-                logger.warning(f"Rate limited on {url}, waiting 60s...")
-                time.sleep(60)
+                logger.warning(f"Rate limited on {url}, waiting 30s...")
+                time.sleep(30)
             else:
+                last_status = resp.status_code
                 logger.warning(f"HTTP {resp.status_code} for {url}")
+        except requests.exceptions.SSLError:
+            logger.debug(f"SSL error for {url} — will try Playwright")
+            use_playwright_fallback = True
+            break
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            logger.debug(f"Connection error for {url}: {type(e).__name__} — will try Playwright")
+            use_playwright_fallback = True
+            break
         except Exception as e:
             logger.warning(f"Fetch error for {url}: {e}")
+
+    if use_playwright_fallback or (last_status and last_status not in (404, 410)):
+        if PLAYWRIGHT_AVAILABLE:
+            logger.info(f"  Falling back to Playwright for {url}")
+            return _fetch_with_playwright(url)
+
     return None
 
 
@@ -247,17 +330,23 @@ def scrape_amari(model_key: str) -> list[dict]:
 def scrape_joe_macari(model_key: str) -> list[dict]:
     """
     Scrape Joe Macari for a specific model.
+    Their site is JS-rendered so we use Playwright.
     Works for any model key — gating is applied via model_registry.
     """
     url = "https://www.joemacari.com/cars-for-sale/"
-    html = fetch_page(url)
+    # Joe Macari's site is JS-rendered — use Playwright directly
+    html = fetch_page(url, force_playwright=True)
     if not html:
         logger.warning("  Joe Macari: failed to fetch stock page")
         return []
 
     soup = BeautifulSoup(html, "html.parser")
+    # Their listing cards link to /stock/<slug>/<id>/
     stock_links = soup.select("a[href*='/stock/']")
-    logger.info(f"  Joe Macari: {len(stock_links)} static stock links")
+    # Filter out nav-level links (need at least 4 path segments: /stock/slug/id)
+    stock_links = [a for a in stock_links
+                   if len(a.get("href", "").rstrip("/").split("/")) >= 4]
+    logger.info(f"  Joe Macari: {len(stock_links)} car page links found")
 
     results = []
     seen_urls: set[str] = set()
@@ -270,16 +359,31 @@ def scrape_joe_macari(model_key: str) -> list[dict]:
                 continue
             seen_urls.add(listing_url)
 
-            title = link_el.get_text(strip=True)
-            if not title:
-                slug = listing_url.rstrip("/").split("/")[-1]
-                title = slug.replace("-", " ").title()
+            # Extract title from heading inside the card, or derive from URL slug
+            # Joe Macari URLs: /stock/<make-model-slug>/<id>/
+            title_el = link_el.select_one("h1, h2, h3, h4, [class*='title'], [class*='name']")
+            title = title_el.get_text(strip=True) if title_el else link_el.get_text(strip=True)
+            title = re.sub(r"\s+", " ", title).strip()
+            if not title or len(title) < 5:
+                # Derive from URL slug: /stock/ferrari-812-superfast/12345 -> 'Ferrari 812 Superfast'
+                parts = listing_url.rstrip("/").split("/")
+                # slug is the second-to-last segment (before the numeric ID)
+                slug_part = parts[-2] if parts[-1].isdigit() else parts[-1]
+                title = slug_part.replace("-", " ").title()
+
+            # Extract price from card
+            price_el = link_el.select_one("[class*='price'], [class*='Price']")
+            price_str = price_el.get_text(strip=True) if price_el else ""
+            if not price_str:
+                pm = re.search(r"£[\d,]+", link_el.get_text())
+                price_str = pm.group(0) if pm else ""
+            price = normalise_price(price_str)
 
             year_match = re.search(r"/stock/(\d{4})/", listing_url) or \
                          re.search(r"\b(20\d{2}|19\d{2})\b", title)
             year = int(year_match.group(1)) if year_match else None
 
-            ok, reason = gate_listing(title, model_key, listing_url, year, None)
+            ok, reason = gate_listing(title, model_key, listing_url, year, price)
             if not ok:
                 logger.debug(f"  Joe Macari SKIP: {title!r} — {reason}")
                 continue
@@ -291,14 +395,14 @@ def scrape_joe_macari(model_key: str) -> list[dict]:
                 "dealer": "Joe Macari",
                 "dealer_type": "independent-specialist",
                 "source_url": listing_url,
-                "asking_price": None,  # Enrichment will get price
+                "asking_price": price,
                 "year": year,
                 "mileage": None,
                 "colour": None,
                 "title": title,
                 "status": "active",
             })
-            logger.info(f"  Joe Macari ACCEPT: {title!r} ({year})")
+            logger.info(f"  Joe Macari ACCEPT: {title!r} ({year}) — {price_str}")
         except Exception as e:
             logger.debug(f"  Joe Macari link parse error: {e}")
 
@@ -309,65 +413,72 @@ def scrape_joe_macari(model_key: str) -> list[dict]:
 def scrape_romans(model_key: str) -> list[dict]:
     """
     Scrape Romans International for a specific model.
-    Uses model_registry to determine the correct make slug for the URL.
+    New URL structure: /used/cars/<make>/ with links to /used/cars/<make>/<model>/<id>
     Works for Ferrari, Lamborghini, McLaren, Porsche, Aston Martin, etc.
     """
     spec = get_model(model_key)
     make_slug = spec.make_slug if spec else "ferrari"
-    url = get_romans_stock_url(make_slug)
+    # New URL structure (2025+)
+    url = f"https://www.romansinternational.com/used/cars/{make_slug}/"
 
-    html = fetch_page(url)
+    html = fetch_page(url, force_playwright=True)
     if not html:
         logger.warning(f"  Romans: failed to fetch {url}")
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    vehicle_list = soup.select("div.vehicle") or soup.select(".listing__list-item")
-    logger.info(f"  Romans [{make_slug}]: {len(vehicle_list)} vehicle cards")
+    # New structure: links to /used/cars/<make>/<model-slug>/--<id>
+    all_links = soup.select(f'a[href*="/used/cars/{make_slug}/"]')
+    # Filter to detail pages (5+ path segments: /used/cars/ferrari/model/--id)
+    detail_links = [a for a in all_links
+                    if len(a.get("href", "").rstrip("/").split("/")) >= 5
+                    and "--" in a.get("href", "")]
+    # Deduplicate by href
+    seen_hrefs: set[str] = set()
+    unique_links = []
+    for a in detail_links:
+        h = a.get("href", "")
+        if h not in seen_hrefs:
+            seen_hrefs.add(h)
+            unique_links.append(a)
+    logger.info(f"  Romans [{make_slug}]: {len(unique_links)} unique vehicle links")
 
     results = []
-    for item in vehicle_list:
+    for link_el in unique_links:
         try:
-            link_el = item.select_one("a[href]")
-            if not link_el:
-                continue
             listing_url = link_el.get("href", "")
             if not listing_url.startswith("http"):
-                listing_url = f"https://www.romansinternational.co.uk{listing_url}"
+                listing_url = f"https://www.romansinternational.com{listing_url}"
 
-            # Build title from structured elements
-            parts = [
-                item.select_one(".vehicle__make"),
-                item.select_one(".vehicle__model"),
-                item.select_one(".vehicle__model-variant"),
-            ]
-            title = " ".join(el.get_text(strip=True) for el in parts if el)
-            if not title:
-                title_el = item.select_one(".vehicle__title, h2, h3")
-                title = title_el.get_text(strip=True) if title_el else link_el.get_text(strip=True)
+            # Extract title from link text (e.g. 'FerrariF12 TDF' or 'Ferrari812 Superfast')
+            raw_text = link_el.get_text(strip=True)
+            # Clean up concatenated make+model:
+            # 'FerrariF12 TDF' -> 'Ferrari F12 TDF' (letter-uppercase boundary)
+            # 'Ferrari812 Superfast' -> 'Ferrari 812 Superfast' (letter-digit boundary)
+            title = re.sub(r"([a-z])([A-Z0-9])", r"\1 \2", raw_text).strip()
+            if not title or title.lower() in ("view vehicle", ""):
+                # Derive from URL slug: /used/cars/ferrari/812-superfast/--4665
+                parts = listing_url.rstrip("/").split("/")
+                # model slug is at index -2 (before --id)
+                model_part = parts[-2] if parts[-1].startswith("--") else parts[-1]
+                make_part = make_slug.title()
+                title = f"{make_part} {model_part.replace('-', ' ').title()}"
 
-            price_el = item.select_one(".vehicle__price, [class*='price']")
-            price_str = price_el.get_text(strip=True) if price_el else ""
+            # Extract price — look in parent container
+            parent = link_el.parent
+            price_str = ""
+            if parent:
+                price_el = parent.select_one("[class*='price'], [class*='Price']")
+                if not price_el:
+                    pm = re.search(r"£[\d,]+", parent.get_text())
+                    price_str = pm.group(0) if pm else ""
+                else:
+                    price_str = price_el.get_text(strip=True)
             price = normalise_price(price_str)
 
-            data_items = item.select(".vehicle__technical-data-item")
-            data_texts = [d.get_text(strip=True) for d in data_items]
-
-            year = None
-            mileage = None
-            colour = None
-            for text in data_texts:
-                if re.search(r"\b(19|20)\d{2}\b", text):
-                    year = int(re.search(r"\b(19|20)\d{2}\b", text).group(0))
-                elif "miles" in text.lower() or "km" in text.lower():
-                    mileage = normalise_mileage(text)
-                elif re.match(r"^[A-Za-z][A-Za-z\s]+$", text) and len(text) > 2 and not colour:
-                    colour = text
-
-            if not year:
-                ym = re.search(r"\b(20\d{2}|19\d{2})\b", title)
-                if ym:
-                    year = int(ym.group(1))
+            # Extract year from title or URL
+            ym = re.search(r"\b(20\d{2}|19\d{2})\b", title + listing_url)
+            year = int(ym.group(1)) if ym else None
 
             ok, reason = gate_listing(title, model_key, listing_url, year, price)
             if not ok:
@@ -383,12 +494,12 @@ def scrape_romans(model_key: str) -> list[dict]:
                 "source_url": listing_url,
                 "asking_price": price,
                 "year": year,
-                "mileage": mileage,
-                "colour": colour,
+                "mileage": None,  # Enrichment will fetch from detail page
+                "colour": None,
                 "title": title,
                 "status": "active",
             })
-            logger.info(f"  Romans ACCEPT: {title!r} — {price_str}")
+            logger.info(f"  Romans ACCEPT: {title!r} — {price_str or 'POA'}")
         except Exception as e:
             logger.debug(f"  Romans card parse error: {e}")
 
@@ -471,12 +582,14 @@ def scrape_generic_dealer(
     stock_url: str,
     model_key: str,
     dealer_type: str = "independent-specialist",
+    force_playwright: bool = False,
+    playwright_wait_ms: int = 0,
 ) -> list[dict]:
     """
     Generic scraper for any dealer in the registry without a bespoke scraper.
 
     Strategy:
-    1. Fetch the stock listing page.
+    1. Fetch the stock listing page (HTTP first, Playwright fallback).
     2. Collect all anchor tags that look like individual car listing pages.
     3. Pre-filter candidates using URL + anchor text against the strict model gate.
     4. Fetch each candidate page and re-gate on the full page title.
@@ -485,7 +598,7 @@ def scrape_generic_dealer(
     This is intentionally conservative — it is better to miss a listing than to
     accept the wrong model.
     """
-    html = fetch_page(stock_url)
+    html = fetch_page(stock_url, force_playwright=force_playwright, playwright_wait_ms=playwright_wait_ms)
     if not html:
         logger.warning(f"  {dealer_name}: failed to fetch {stock_url}")
         return []
@@ -494,9 +607,13 @@ def scrape_generic_dealer(
     base_url = "/".join(stock_url.split("/")[:3])
 
     # Patterns that suggest an individual car listing page
+    # Covers: Redline (/car/<slug>/), Dragon2000 (/used-car/<slug>/), WordPress (/stock/<slug>/),
+    #         Romans (/used/cars/<make>/<model>/), generic (/vehicle/, /listing/, /details/)
     car_page_patterns = [
-        r"/stock/", r"/car/", r"/vehicle/", r"/used/", r"/for-sale/",
-        r"/inventory/", r"/listing/", r"/details/", r"/cars/",
+        r"/stock/[^/]+", r"/car/[^/]+", r"/vehicle/[^/]+", r"/used-car/[^/]+",
+        r"/used/cars/[^/]+/[^/]+", r"/for-sale/[^/]+", r"/inventory/[^/]+",
+        r"/listing/[^/]+", r"/details/[^/]+", r"/cars/[^/]+",
+        r"/vehicle-details/[^/]+",  # DMB Collection (Dragon2000 DMS)
     ]
     all_links = soup.select("a[href]")
     candidate_links: list[tuple[str, str]] = []
@@ -532,9 +649,19 @@ def scrape_generic_dealer(
 
             page_soup = BeautifulSoup(page_html, "html.parser")
 
-            # Extract title from page heading
+            # Extract title from page heading; fall back to slug-derived title
             h1 = page_soup.select_one("h1")
-            title = h1.get_text(strip=True) if h1 else anchor_text
+            title = h1.get_text(strip=True) if h1 else ""
+            if not title:
+                # Derive title from URL slug (e.g. /car/ferrari-812-superfast-20240101/ → Ferrari 812 Superfast)
+                slug_match = re.search(r"/([a-z0-9-]+)/?$", listing_url)
+                if slug_match:
+                    slug = slug_match.group(1)
+                    # Remove trailing ID-like numeric suffix
+                    slug = re.sub(r"-\d{8,}$", "", slug)
+                    title = slug.replace("-", " ").title()
+            if not title:
+                title = anchor_text
 
             # Extract price
             price_str = ""
@@ -629,25 +756,38 @@ def scrape_all_specialist_dealers(model_key: str) -> list[dict]:
     logger.info(f"Specialist dealer scrape: {MODEL_REGISTRY[model_key].label}")
     logger.info(f"{'='*50}")
 
+    DEALER_TIMEOUT_SECS = 90  # Hard timeout per dealer — prevents any single site from hanging the run
+
+    def _run_with_timeout(fn, *args, label="dealer", timeout=DEALER_TIMEOUT_SECS):
+        """Run fn(*args) in a thread with a hard timeout. Returns [] on timeout or error."""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(fn, *args)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"  {label}: TIMEOUT after {timeout}s — skipping")
+                return []
+            except Exception as e:
+                logger.error(f"  {label}: ERROR — {e}")
+                return []
+
     # Tier 1: Bespoke scrapers (run each unique scraper function once)
     for dealer_key, scraper_fn in BESPOKE_SCRAPERS.items():
         fn_id = id(scraper_fn)
         if fn_id in bespoke_run:
             continue
         bespoke_run.add(fn_id)
-        try:
-            results = scraper_fn(model_key)
-            added = 0
-            for r in results:
-                url = r.get("source_url", "")
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    all_results.append(r)
-                    added += 1
-            if added:
-                logger.info(f"  {dealer_key.title()}: +{added} listings")
-        except Exception as e:
-            logger.error(f"  {dealer_key.title()} bespoke scraper failed: {e}")
+        results = _run_with_timeout(scraper_fn, model_key, label=dealer_key.title())
+        added = 0
+        for r in results:
+            url = r.get("source_url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_results.append(r)
+                added += 1
+        if added:
+            logger.info(f"  {dealer_key.title()}: +{added} listings")
 
     # Tier 2: Generic scraper for all other registry dealers
     for reg_key, entry in DEALER_REGISTRY.items():
@@ -657,28 +797,38 @@ def scrape_all_specialist_dealers(model_key: str) -> list[dict]:
         # Skip Ferrari/Lamborghini Approved — handled by FA scraper in discovery_scraper.py
         if entry["dealer_type"] == "ferrari-approved":
             continue
+        # Skip unsupported scrapers
+        if entry.get("scraper") == "unsupported":
+            continue
         stock_url = entry.get("stock_url", "")
-        if not stock_url or "{make_slug}" in stock_url:
-            continue  # Templated URL — skip (handled by bespoke scraper)
+        if not stock_url:
+            continue
 
-        try:
-            results = scrape_generic_dealer(
+        # Resolve make-aware URLs (e.g. Redline: /ferrari-cars-for-sale/)
+        if entry.get("make_aware") and "{make_slug}" in stock_url:
+            make_slug = MODEL_REGISTRY[model_key].make.lower()
+            stock_url = stock_url.replace("{make_slug}", make_slug)
+
+        def _generic(stock_url=stock_url, entry=entry):
+            return scrape_generic_dealer(
                 dealer_name=entry["name"],
                 stock_url=stock_url,
                 model_key=model_key,
                 dealer_type=entry["dealer_type"],
+                force_playwright=entry.get("playwright_required", False),
+                playwright_wait_ms=entry.get("playwright_wait_ms", 0),
             )
-            added = 0
-            for r in results:
-                url = r.get("source_url", "")
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    all_results.append(r)
-                    added += 1
-            if added:
-                logger.info(f"  {entry['name']} (generic): +{added} listings")
-        except Exception as e:
-            logger.error(f"  {entry['name']} generic scraper failed: {e}")
+
+        results = _run_with_timeout(_generic, label=entry["name"])
+        added = 0
+        for r in results:
+            url = r.get("source_url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_results.append(r)
+                added += 1
+        if added:
+            logger.info(f"  {entry['name']} (generic): +{added} listings")
 
     logger.info(f"\nTotal specialist dealer listings for {model_key}: {len(all_results)}")
     return all_results

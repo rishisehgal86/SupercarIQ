@@ -16,15 +16,18 @@ When enriching an AutoTrader listing:
 
 Scraper types:
   - "ferraridealers"  : Official Ferrari dealer on ferraridealers.com subdomain
-  - "hrowen"          : HR Owen (official Ferrari dealer, own site)
-  - "stratstone"      : Stratstone (official Ferrari dealer, own site)
-  - "specialist"      : Independent specialist with custom site
+  - "specialist"      : Independent specialist with custom bespoke scraper
   - "generic"         : Generic dealer — use LLM on whatever page we can find
 
 Dealer types:
   - "ferrari-approved"        : Official Ferrari dealer
   - "independent-specialist"  : Known independent supercar specialist
   - "general-dealer"          : General prestige/used car dealer
+
+stock_url notes:
+  - If `make_aware: True`, the stock_url is a template with {make_slug} placeholder.
+    Use get_make_aware_stock_url(dealer_key, make_slug) to resolve it.
+  - If `playwright_required: True`, always use Playwright (skip HTTP attempt).
 """
 
 from __future__ import annotations
@@ -34,15 +37,6 @@ from typing import Optional
 # ── Registry ──────────────────────────────────────────────────────────────────
 # Key: normalised dealer name (lowercase, stripped)
 # Value: dict with scraper config
-#
-# Fields:
-#   name          : canonical display name
-#   dealer_type   : classification
-#   scraper       : which scraper strategy to use
-#   base_url      : root URL of the dealer's own website
-#   stock_url     : URL of their used/stock listing page (if known)
-#   search_param  : query param to filter by model (if applicable)
-#   notes         : any notes about the dealer or scraper
 
 DEALER_REGISTRY: dict[str, dict] = {
 
@@ -211,7 +205,7 @@ DEALER_REGISTRY: dict[str, dict] = {
         "scraper": "specialist",
         "base_url": "https://www.joemacari.com",
         "stock_url": "https://www.joemacari.com/cars-for-sale/",
-        "notes": "WordPress site, article cards",
+        "notes": "WordPress site — car detail pages at /stock/<slug>/<id>",
     },
     "joe macari performance cars": {
         "name": "Joe Macari",
@@ -225,10 +219,11 @@ DEALER_REGISTRY: dict[str, dict] = {
         "name": "Romans International",
         "dealer_type": "independent-specialist",
         "scraper": "specialist",
-        "base_url": "https://www.romansinternational.co.uk",
+        "base_url": "https://www.romansinternational.com",
         # stock_url is make-aware — use get_romans_stock_url(make_slug) instead
-        "stock_url": "https://www.romansinternational.co.uk/used/cars/{make_slug}/",
-        "notes": "Custom CMS, li.vehicle-item cards. URL is templated — replace {make_slug}.",
+        "stock_url": "https://www.romansinternational.com/used/cars/{make_slug}/",
+        "make_aware": True,
+        "notes": "New URL structure (2025+): /used/cars/<make>/<model>/--<id>. URL is templated.",
     },
     "tom hartley": {
         "name": "Tom Hartley Jnr",
@@ -249,129 +244,61 @@ DEALER_REGISTRY: dict[str, dict] = {
     "bell sport & classic": {
         "name": "Bell Sport & Classic",
         "dealer_type": "independent-specialist",
-        "scraper": "specialist",
+        "scraper": "unsupported",
         "base_url": "https://www.bellsportandclassic.co.uk",
         "stock_url": "https://www.bellsportandclassic.co.uk/used-cars-for-sale/",
-        "notes": "Ferrari specialist St Albans",
+        "notes": "Dragon2000 DMS SPA — car links not in static DOM, requires click-through navigation. Specialises in classic/vintage Ferraris (pre-2000). Not worth scraping for modern models.",
     },
-    "bell sport and classic": {
-        "name": "Bell Sport & Classic",
-        "dealer_type": "independent-specialist",
-        "scraper": "specialist",
-        "base_url": "https://www.bellsportandclassic.co.uk",
-        "stock_url": "https://www.bellsportandclassic.co.uk/used-cars-for-sale/",
-        "notes": "AutoTrader variant name",
-    },
-    "shaks specialist cars": {
-        "name": "Shaks Specialist Cars",
-        "dealer_type": "independent-specialist",
-        "scraper": "specialist",
-        "base_url": "https://www.s-s-c.co.uk",
-        "stock_url": "https://www.s-s-c.co.uk/stock/used-cars-in-huddersfield-west-yorkshire",
-        "notes": "Huddersfield-based supercar specialist",
-    },
+    # Note: "bell sport and classic" is an alias — handled by normalise_dealer_name()
     "redline specialist cars": {
         "name": "Redline Specialist Cars",
         "dealer_type": "independent-specialist",
         "scraper": "generic",
-        "base_url": "https://www.redlinespecialistcars.co.uk",
-        "stock_url": "https://www.redlinespecialistcars.co.uk/used-cars/",
-        "notes": "Independent specialist — generic scraper",
-    },
-    "premier gt limited": {
-        "name": "Premier GT",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.premiergt.co.uk",
-        "stock_url": "https://www.premiergt.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "premier gt": {
-        "name": "Premier GT",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.premiergt.co.uk",
-        "stock_url": "https://www.premiergt.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "ventura collection": {
-        "name": "Ventura Collection",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.venturacollection.co.uk",
-        "stock_url": "https://www.venturacollection.co.uk/stock/",
-        "notes": "Independent specialist",
+        "base_url": "https://redlinespecialistcars.co.uk",
+        # make_aware: True — stock URL uses {make_slug}-cars-for-sale/ pattern
+        "stock_url": "https://redlinespecialistcars.co.uk/{make_slug}-cars-for-sale/",
+        "make_aware": True,
+        "notes": "Make-specific stock pages: /ferrari-cars-for-sale/, /lamborghini-cars-for-sale/ etc. Car detail links at /car/<make>-<model>-<id>/",
     },
     "dmb collection": {
         "name": "DMB Collection",
         "dealer_type": "independent-specialist",
         "scraper": "generic",
         "base_url": "https://www.dmbcollection.co.uk",
-        "stock_url": "https://www.dmbcollection.co.uk/used-cars/",
-        "notes": "Independent specialist",
+        "stock_url": "https://www.dmbcollection.co.uk/used-cars-for-sale/",
+        "playwright_required": True,
+        "playwright_wait_ms": 4000,
+        "notes": "Dragon2000 DMS — JS-rendered, requires Playwright + 4s wait. Car links at /used-car/<slug>/",
     },
-    "european prestige uk": {
-        "name": "European Prestige UK",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.europeanprestigeuk.com",
-        "stock_url": "https://www.europeanprestigeuk.com/used-cars/",
-        "notes": "Independent prestige dealer",
-    },
-    "morgan cars": {
-        "name": "Morgan Cars",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.morgancars.co.uk",
-        "stock_url": "https://www.morgancars.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "storm performance": {
-        "name": "Storm Performance",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.stormperformance.co.uk",
-        "stock_url": "https://www.stormperformance.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "jim hallam": {
-        "name": "Jim Hallam",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.jimhallam.co.uk",
-        "stock_url": "https://www.jimhallam.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "auto100.co.uk": {
-        "name": "Auto100",
-        "dealer_type": "independent-specialist",
-        "scraper": "generic",
-        "base_url": "https://www.auto100.co.uk",
-        "stock_url": "https://www.auto100.co.uk/used-cars/",
-        "notes": "Independent specialist",
-    },
-    "bramley": {
-        "name": "Bramley",
-        "dealer_type": "general-dealer",
-        "scraper": "generic",
-        "base_url": "https://www.bramley.co.uk",
-        "stock_url": "https://www.bramley.co.uk/used-cars/",
-        "notes": "General dealer",
-    },
-    "bramshaw bespoke vehicles": {
-        "name": "Bramshaw Bespoke Vehicles",
-        "dealer_type": "general-dealer",
-        "scraper": "generic",
-        "base_url": "https://www.bramshawbespoke.co.uk",
-        "stock_url": "https://www.bramshawbespoke.co.uk/used-cars/",
-        "notes": "General dealer",
-    },
+    # ── Removed dealers (do not re-add without verifying) ────────────────────
+    # "premier gt"              — SSL certificate broken at server level (EOF on TLS handshake)
+    # "shaks specialist cars"   — Cloudflare bot challenge, completely blocks all scrapers
+    # "european prestige uk"    — DNS not resolving (dead domain)
+    # "storm performance"       — DNS not resolving (dead domain)
+    # "jim hallam"              — DNS not resolving (dead domain)
+    # "bramshaw bespoke"        — DNS not resolving (dead domain)
+    # "ventura collection"      — Not a car dealer (furniture company)
+    # "morgan cars"             — Does not stock Ferrari/Lamborghini/McLaren
 }
 
 
 def get_romans_stock_url(make_slug: str) -> str:
     """Return the Romans International stock URL for a given make slug."""
-    return f"https://www.romansinternational.co.uk/used/cars/{make_slug}/"
+    return f"https://www.romansinternational.com/used/cars/{make_slug}/"
+
+
+def get_make_aware_stock_url(dealer_key: str, make_slug: str) -> Optional[str]:
+    """
+    Resolve a make-aware stock URL for a given dealer and make slug.
+    Returns None if the dealer is not in the registry or not make-aware.
+    """
+    entry = DEALER_REGISTRY.get(dealer_key)
+    if not entry or not entry.get("make_aware"):
+        return None
+    template = entry.get("stock_url", "")
+    if "{make_slug}" not in template:
+        return None
+    return template.replace("{make_slug}", make_slug)
 
 
 def lookup_dealer(dealer_name: str) -> Optional[dict]:
@@ -379,53 +306,15 @@ def lookup_dealer(dealer_name: str) -> Optional[dict]:
     Look up a dealer by name (case-insensitive, normalised).
     Returns the registry entry or None if not found.
     """
-    if not dealer_name:
-        return None
-    key = dealer_name.strip().lower()
-    # Direct match
-    if key in DEALER_REGISTRY:
-        return DEALER_REGISTRY[key]
-    # Partial match — check if any registry key is contained in the name
-    for reg_key, entry in DEALER_REGISTRY.items():
-        if reg_key in key or key in reg_key:
-            return entry
-    return None
+    key = normalise_dealer_name(dealer_name)
+    return DEALER_REGISTRY.get(key)
 
 
-def get_dealer_stock_url(dealer_name: str) -> Optional[str]:
-    """Return the stock listing URL for a known dealer, or None."""
-    entry = lookup_dealer(dealer_name)
-    return entry["stock_url"] if entry else None
-
-
-def get_dealer_type(dealer_name: str) -> str:
-    """Return the dealer type string for a known dealer, or 'general-dealer'."""
-    entry = lookup_dealer(dealer_name)
-    return entry["dealer_type"] if entry else "general-dealer"
-
-
-def is_known_dealer(dealer_name: str) -> bool:
-    """Return True if the dealer is in the registry."""
-    return lookup_dealer(dealer_name) is not None
-
-
-def list_all_dealers() -> list[dict]:
-    """Return all registry entries as a list."""
-    return list(DEALER_REGISTRY.values())
-
-
-if __name__ == "__main__":
-    # Quick test
-    test_names = [
-        "Graypaul Nottingham", "HR Owen", "Amari Supercars (GB)",
-        "Tom Hartley", "Romans International", "Unknown Dealer XYZ",
-        "Stratstone Manchester", "Bell Sport & Classic", "Shaks Specialist Cars",
-    ]
-    print(f"{'Dealer Name':<35} {'Found':<6} {'Type':<25} {'Scraper'}")
-    print("-" * 80)
-    for name in test_names:
-        entry = lookup_dealer(name)
-        if entry:
-            print(f"{name:<35} {'YES':<6} {entry['dealer_type']:<25} {entry['scraper']}")
-        else:
-            print(f"{name:<35} {'NO':<6} {'—':<25} —")
+def normalise_dealer_name(name: str) -> str:
+    """Normalise a dealer name for registry lookup."""
+    name = name.lower().strip()
+    # Normalise punctuation variants
+    name = name.replace("&", "and")
+    name = re.sub(r"['\"\.,]", "", name)
+    name = re.sub(r"\s+", " ", name)
+    return name
