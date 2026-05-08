@@ -31,7 +31,7 @@ Railway Project: SupercarIQ
 ## Step 3: Deploy the Web App
 
 1. **+ New Service** → **GitHub Repo** → select `rishisehgal86/SupercarIQ`
-2. Set **Root Directory** to `web`
+2. ⚠️ **CRITICAL**: Set **Root Directory** to `web` — without this, Railway scans the monorepo root and fails with "Railpack could not determine how to build the app"
 3. Railway will auto-detect the `Dockerfile` in `web/`
 4. Set these **Environment Variables**:
 

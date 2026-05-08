@@ -1,5 +1,10 @@
-# Railway Web App configuration for the Ferrari SupercarIQ web app.
-# The pipeline cron service is in pipeline/railway.toml.
+# Railway Web App configuration for SupercarIQ.
+#
+# ⚠️  IMPORTANT: In Railway dashboard, this service MUST have:
+#     Source → Root Directory = "web"
+#
+# With Root Directory = "web", Railway sets the Docker build context to web/,
+# so all COPY commands in the Dockerfile are relative to web/.
 
 [build]
 builder = "dockerfile"
