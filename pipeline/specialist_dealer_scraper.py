@@ -609,11 +609,14 @@ def scrape_generic_dealer(
     # Patterns that suggest an individual car listing page
     # Covers: Redline (/car/<slug>/), Dragon2000 (/used-car/<slug>/), WordPress (/stock/<slug>/),
     #         Romans (/used/cars/<make>/<model>/), generic (/vehicle/, /listing/, /details/)
+    #         Kaaimans (/current-stock/<slug>/), European Prestige (/stock/for-sale/details/<slug>/<id>)
     car_page_patterns = [
         r"/stock/[^/]+", r"/car/[^/]+", r"/vehicle/[^/]+", r"/used-car/[^/]+",
         r"/used/cars/[^/]+/[^/]+", r"/for-sale/[^/]+", r"/inventory/[^/]+",
         r"/listing/[^/]+", r"/details/[^/]+", r"/cars/[^/]+",
         r"/vehicle-details/[^/]+",  # DMB Collection (Dragon2000 DMS)
+        r"/current-stock/[^/]+",    # Kaaimans International
+        r"/stock/for-sale/details/[^/]+",  # European Prestige UK
     ]
     all_links = soup.select("a[href]")
     candidate_links: list[tuple[str, str]] = []

@@ -270,15 +270,55 @@ DEALER_REGISTRY: dict[str, dict] = {
         "playwright_wait_ms": 4000,
         "notes": "Dragon2000 DMS — JS-rendered, requires Playwright + 4s wait. Car links at /used-car/<slug>/",
     },
+    "kaaimans international": {
+        "name": "Kaaimans International",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.kaaimans.com",
+        "stock_url": "https://www.kaaimans.com/current-stock/",
+        "playwright_required": True,
+        "playwright_wait_ms": 3000,
+        "notes": "JS-rendered site (Nottinghamshire). Stocks Ferrari (12 Cilindri, 458 Speciale, 599 GTO), Aston Martin, Lamborghini. Car links at /current-stock/<slug>/",
+    },
+    "kaaimans": {
+        "name": "Kaaimans International",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.kaaimans.com",
+        "stock_url": "https://www.kaaimans.com/current-stock/",
+        "playwright_required": True,
+        "playwright_wait_ms": 3000,
+        "notes": "Short name alias for Kaaimans International",
+    },
+    "european prestige uk": {
+        "name": "European Prestige UK",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.europeanprestige.co.uk",
+        "stock_url": "https://www.europeanprestige.co.uk/stock/for-sale",
+        "notes": "Orpington, Kent. Stocks Ferrari (812 Superfast, 812 GTS, F8 Tributo, 296 GTB, 458 Speciale), Lamborghini, McLaren, Porsche. Car detail URLs at /stock/for-sale/details/<slug>/<id>",
+    },
+    "ryland specialist cars": {
+        "name": "Ryland Specialist Cars",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.ryland.co.uk",
+        "stock_url": "https://www.ryland.co.uk/specialist-cars/used-cars/",
+        "makes": ["lamborghini", "mclaren", "porsche", "bentley", "rolls-royce", "lotus", "maserati"],
+        "notes": "Solihull. Franchise dealer group — Lamborghini, McLaren, Porsche, Bentley, Rolls-Royce, Lotus, Maserati. NO Ferrari.",
+    },
     # ── Removed dealers (do not re-add without verifying) ────────────────────
     # "premier gt"              — SSL certificate broken at server level (EOF on TLS handshake)
     # "shaks specialist cars"   — Cloudflare bot challenge, completely blocks all scrapers
-    # "european prestige uk"    — DNS not resolving (dead domain)
     # "storm performance"       — DNS not resolving (dead domain)
     # "jim hallam"              — DNS not resolving (dead domain)
     # "bramshaw bespoke"        — DNS not resolving (dead domain)
     # "ventura collection"      — Not a car dealer (furniture company)
     # "morgan cars"             — Does not stock Ferrari/Lamborghini/McLaren
+    # "oakmoore car company"    — Domain resolves but stock page URL unknown; homepage Cloudflare-blocked
+    # "foskers"                 — Classic Ferrari only (pre-2000 models), not relevant for modern supercars
+    # "hexagon classics"        — Classic cars only (pre-1990s), not relevant for modern supercars
+    # "the supercar rooms"      — Aston Martin heavy, no Ferrari currently stocked
 }
 
 
