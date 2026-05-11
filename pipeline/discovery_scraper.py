@@ -419,7 +419,8 @@ def batch_upsert_listings(conn, listings: list[dict], dry_run: bool = False) -> 
 
         if not existing:
             if dry_run:
-                log.info(f"    [DRY RUN] Would insert: {lid} @ £{listing['asking_price']:,}")
+                price_str = f"£{listing['asking_price']:,}" if listing.get('asking_price') else 'POA'
+                log.info(f"    [DRY RUN] Would insert: {lid} @ {price_str}")
             else:
                 new_listings.append((
                     lid, listing["source_url"], listing["model_key"], listing["source"],

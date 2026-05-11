@@ -63,7 +63,7 @@ HEADERS = {
     "Cache-Control": "max-age=0",
 }
 
-REQUEST_DELAY = 3.0  # seconds between requests
+REQUEST_DELAY = 1.5  # seconds between requests (reduced from 3.0 to keep discovery within 30-min budget)
 
 
 def _fetch_with_playwright(url: str, timeout_ms: int = 30_000, extra_wait_ms: int = 0) -> Optional[str]:
@@ -753,6 +753,7 @@ def scrape_all_specialist_dealers(model_key: str) -> list[dict]:
 
     all_results: list[dict] = []
     seen_urls: set[str] = set()
+    seen_base_urls: set[str] = set()  # Prevent scraping the same site twice via registry aliases
     bespoke_run: set[str] = set()
 
     logger.info(f"\n{'='*50}")
@@ -806,6 +807,24 @@ def scrape_all_specialist_dealers(model_key: str) -> list[dict]:
         stock_url = entry.get("stock_url", "")
         if not stock_url:
             continue
+
+        # Skip dealers whose 'makes' list explicitly excludes this model's make
+        # (e.g. Ryland stocks Lamborghini/McLaren/Porsche but NO Ferrari)
+        dealer_makes = entry.get("makes")
+        if dealer_makes:
+            model_make = MODEL_REGISTRY[model_key].make.lower()
+            if not any(m.lower() in model_make or model_make in m.lower() for m in dealer_makes):
+                logger.debug(f"  Skipping {entry['name']} — make {model_make!r} not in dealer makes {dealer_makes}")
+                continue
+
+        # Skip aliases pointing to the same base_url as an already-scraped dealer
+        # (e.g. "kaaimans" and "kaaimans international" both point to kaaimans.com)
+        dealer_base_url = entry.get("base_url", "").rstrip("/")
+        if dealer_base_url and dealer_base_url in seen_base_urls:
+            logger.debug(f"  Skipping alias {reg_key!r} — {dealer_base_url} already scraped")
+            continue
+        if dealer_base_url:
+            seen_base_urls.add(dealer_base_url)
 
         # Resolve make-aware URLs (e.g. Redline: /ferrari-cars-for-sale/)
         if entry.get("make_aware") and "{make_slug}" in stock_url:

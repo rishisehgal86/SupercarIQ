@@ -283,7 +283,7 @@ def phase_1_discovery(dry_run=False):
     rc, out, err = run_cmd(
         f"python3 {PIPELINE_DIR}/discovery_scraper.py",
         cwd=PIPELINE_DIR,
-        timeout=600  # 10 min max for discovery
+        timeout=1800  # 30 min max for discovery (15 models × ~12 dealers × up to 90s each)
     )
     if out:
         log.info(f"Discovery output:\n{out[-3000:]}")  # last 3000 chars
