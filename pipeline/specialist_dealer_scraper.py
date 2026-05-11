@@ -617,6 +617,7 @@ def scrape_generic_dealer(
         r"/vehicle-details/[^/]+",  # DMB Collection (Dragon2000 DMS)
         r"/current-stock/[^/]+",    # Kaaimans International
         r"/stock/for-sale/details/[^/]+",  # European Prestige UK
+        r"/used-car-details/[^/]+",         # Tom Hartley Senior
     ]
     all_links = soup.select("a[href]")
     candidate_links: list[tuple[str, str]] = []

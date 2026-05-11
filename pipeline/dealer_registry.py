@@ -257,14 +257,6 @@ DEALER_REGISTRY: dict[str, dict] = {
         "make_aware": True,
         "notes": "New URL structure (2025+): /used/cars/<make>/<model>/--<id>. URL is templated.",
     },
-    "tom hartley": {
-        "name": "Tom Hartley Jnr",
-        "dealer_type": "independent-specialist",
-        "scraper": "specialist",
-        "base_url": "https://www.tomhartleyjnr.com",
-        "stock_url": "https://www.tomhartleyjnr.com/current-stock/",
-        "notes": "Custom CMS, li > a[href*='/car/stock/']",
-    },
     "tom hartley jnr": {
         "name": "Tom Hartley Jnr",
         "dealer_type": "independent-specialist",
