@@ -255,10 +255,9 @@ DEALER_REGISTRY: dict[str, dict] = {
         "dealer_type": "independent-specialist",
         "scraper": "generic",
         "base_url": "https://redlinespecialistcars.co.uk",
-        # make_aware: True — stock URL uses {make_slug}-cars-for-sale/ pattern
-        "stock_url": "https://redlinespecialistcars.co.uk/{make_slug}-cars-for-sale/",
-        "make_aware": True,
-        "notes": "Make-specific stock pages: /ferrari-cars-for-sale/, /lamborghini-cars-for-sale/ etc. Car detail links at /car/<make>-<model>-<id>/",
+        # Single /cars/ page for all makes (258 results). No make-specific pages exist.
+        "stock_url": "https://redlinespecialistcars.co.uk/cars/",
+        "notes": "Single all-makes stock page /cars/. Car detail links at /car/<make>-<model>-<id>/",
     },
     "dmb collection": {
         "name": "DMB Collection",

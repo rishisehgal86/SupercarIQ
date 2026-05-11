@@ -720,6 +720,101 @@ def scrape_generic_dealer(
     return results
 
 
+def scrape_redline(model_key: str) -> list[dict]:
+    """
+    Scrape Redline Specialist Cars via their private WordPress REST API.
+    The /cars/ page is JS-rendered; the API returns HTML fragments with car links.
+    Endpoint: /wp-json/at/v1/load-vehicle-data?page=1&per_page=300
+    """
+    api_url = "https://redlinespecialistcars.co.uk/wp-json/at/v1/load-vehicle-data?page=1&per_page=300"
+    try:
+        resp = requests.get(api_url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"  Redline Specialist Cars: API fetch failed — {e}")
+        return []
+
+    html_fragment = data.get("html", "")
+    if not html_fragment:
+        logger.warning("  Redline Specialist Cars: empty API response")
+        return []
+
+    soup = BeautifulSoup(html_fragment, "html.parser")
+    # Car links are at /car/<slug>/ — deduplicate (each card has multiple links)
+    seen_hrefs: set[str] = set()
+    car_links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/car/" in href and href not in seen_hrefs:
+            seen_hrefs.add(href)
+            if not href.startswith("http"):
+                href = f"https://redlinespecialistcars.co.uk{href}"
+            car_links.append(href)
+
+    logger.info(f"  Redline Specialist Cars: {len(car_links)} unique car links from API")
+
+    results = []
+    for listing_url in car_links:
+        try:
+            # Pre-filter by URL slug before fetching the detail page
+            url_ok, _ = gate_listing("", model_key, listing_url)
+            if not url_ok:
+                continue
+
+            time.sleep(REQUEST_DELAY)
+            page_html = fetch_page(listing_url, retries=2, delay=1.0)
+            if not page_html:
+                continue
+
+            page_soup = BeautifulSoup(page_html, "html.parser")
+
+            # Title: <h1> or <title>
+            h1 = page_soup.select_one("h1")
+            title = h1.get_text(strip=True) if h1 else ""
+            if not title:
+                title_tag = page_soup.find("title")
+                title = title_tag.get_text(strip=True).split("|")[0].strip() if title_tag else ""
+
+            # Price: look for £ pattern
+            price_match = re.search(r"£[\d,]+", page_soup.get_text())
+            price = normalise_price(price_match.group(0)) if price_match else None
+
+            # Year: from title or URL slug
+            year_match = re.search(r"\b(20\d{2}|19\d{2})\b", title + listing_url)
+            year = int(year_match.group(1)) if year_match else None
+
+            # Mileage
+            mileage_match = re.search(r"([\d,]+)\s*(?:miles|mi|mileage)", page_soup.get_text(), re.IGNORECASE)
+            mileage = int(mileage_match.group(1).replace(",", "")) if mileage_match else None
+
+            ok, reason = gate_listing(title, model_key, listing_url, year, price)
+            if not ok:
+                logger.debug(f"  Redline SKIP: {title!r} — {reason}")
+                continue
+
+            results.append({
+                "listing_id": make_listing_id("REDL", model_key, listing_url),
+                "model_key": model_key,
+                "source": "specialist-dealer",
+                "dealer": "Redline Specialist Cars",
+                "dealer_type": "independent-specialist",
+                "source_url": listing_url,
+                "asking_price": price,
+                "year": year,
+                "mileage": mileage,
+                "colour": None,
+                "title": title,
+                "status": "active",
+            })
+            logger.info(f"  Redline ACCEPT: {title!r} — {price_match.group(0) if price_match else 'POA'}")
+        except Exception as e:
+            logger.debug(f"  Redline page parse error for {listing_url}: {e}")
+
+    logger.info(f"  Redline Specialist Cars: {len(results)} accepted for {model_key}")
+    return results
+
+
 # ── Bespoke scraper dispatch ──────────────────────────────────────────────────
 
 # Maps dealer registry keys to their bespoke scraper functions
@@ -731,6 +826,7 @@ BESPOKE_SCRAPERS: dict[str, callable] = {
     "romans international": scrape_romans,
     "tom hartley": scrape_tom_hartley,
     "tom hartley jnr": scrape_tom_hartley,
+    "redline specialist cars": scrape_redline,
 }
 
 
