@@ -24,6 +24,8 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
+import asyncio
+
 import mysql.connector
 import requests
 from dotenv import load_dotenv
@@ -85,6 +87,49 @@ def fetch_page(url: str, retries: int = 3, delay: float = 5.0) -> str | None:
             if attempt < retries - 1:
                 time.sleep(delay)
     return None
+
+
+def fetch_page_playwright(url: str, wait_ms: int = 3000) -> str | None:
+    """
+    Fetch a page using a headless Chromium browser via Playwright.
+    Used for sites that block plain HTTP requests (e.g. Ferrari Approved
+    preowned.ferrari.com which returns 403 via CloudFront for non-browser requests).
+    Returns the full rendered HTML, or None on failure.
+    """
+    async def _fetch() -> str | None:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            log.warning("Playwright not installed — falling back to requests")
+            return fetch_page(url)
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-GB",
+                )
+                page = await context.new_page()
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(wait_ms)
+                    html = await page.content()
+                    return html
+                except Exception as e:
+                    log.warning(f"Playwright page load error for {url}: {e}")
+                    return None
+                finally:
+                    await browser.close()
+        except Exception as e:
+            log.warning(f"Playwright launch error: {e}")
+            return None
+
+    return asyncio.run(_fetch())
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 def parse_db_url(url: str):
@@ -674,14 +719,13 @@ def is_incomplete_spec(spec: dict, dealer_page_fetched: bool) -> tuple[bool, str
 
 
 def mark_listing_incomplete(conn, listing_id: str, reason: str) -> None:
-    """Mark a listing as incomplete_data in car_listings."""
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE car_listings SET status = 'incomplete_data', updatedAt = NOW() WHERE id = %s",
-        (listing_id,)
-    )
-    conn.commit()
-    log.warning(f"  Marked {listing_id} as incomplete_data: {reason}")
+    """Log that a listing has incomplete spec data.
+    
+    Note: We intentionally do NOT change the listing status here — the listing
+    remains 'active' so it stays visible on the site. Incomplete enrichment means
+    we'll retry on the next pipeline run.
+    """
+    log.warning(f"  Incomplete spec for {listing_id}: {reason} — will retry on next run")
 
 
 # ── Main enrichment function ──────────────────────────────────────────────────
@@ -704,21 +748,78 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
     log.info(f"Enriching {listing_id} ({model_key}) source={source} — {source_url}")
 
     # Step 1: Fetch the source listing page
+    # Ferrari Approved (preowned.ferrari.com) detail page URLs expire within ~24h and
+    # the detail pages themselves contain minimal spec data. The correct approach is:
+    #   1. Re-scrape the FA search page to get fresh listing data (price, year, colour,
+    #      mileage, dealer name) — this is fast (~10s) and always up to date.
+    #   2. Use the dealer name to look up the dealer's own website in the registry.
+    #   3. Fetch the dealer's website as the primary source of spec data.
+    # We do NOT fetch the FA detail page at all — it's either 404 or contains no spec.
     log.info(f"  Fetching source page: {source_url}")
-    source_html = fetch_page(source_url)
-    if not source_html:
-        log.error(f"  Failed to fetch source page")
-        conn.close()
-        return False
 
-    source_text = extract_text_from_html(source_html)
-    source_images = extract_images_from_html(source_html, source_url)
+    # For FA listings: re-scrape FA search page, get dealer name, fetch dealer site
+    fa_fresh_listing = None  # Will hold fresh FA listing data if available
+    if source == "ferrari-approved":
+        log.info(f"  Ferrari Approved listing — re-scraping FA search page for fresh data")
+        try:
+            from fa_playwright_scraper import scrape_ferrari_approved_playwright, MODEL_FA_SLUGS
+            fa_slug = MODEL_FA_SLUGS.get(model_key)
+            if fa_slug:
+                fresh_listings = scrape_ferrari_approved_playwright(model_key, fa_slug)
+                fa_fresh_listing = next((l for l in fresh_listings if l["id"] == listing_id), None)
+                if fa_fresh_listing:
+                    log.info(f"  FA fresh data: dealer={fa_fresh_listing.get('dealer_name')}, "
+                             f"price=£{fa_fresh_listing.get('asking_price', 0):,}, "
+                             f"year={fa_fresh_listing.get('year')}, colour={fa_fresh_listing.get('colour')}")
+                else:
+                    log.warning(f"  Listing {listing_id} not found in fresh FA scrape — may be sold/removed")
+                    # Mark as archived since it's no longer on FA
+                    if not dry_run:
+                        cur2 = conn.cursor()
+                        cur2.execute(
+                            "UPDATE car_listings SET status = 'archived', archivedAt = NOW() WHERE id = %s",
+                            (listing_id,)
+                        )
+                        conn.commit()
+                    conn.close()
+                    return False
+            else:
+                log.warning(f"  No FA slug for {model_key} — will try stored URL")
+        except Exception as e:
+            log.warning(f"  FA re-scrape failed: {e} — will try stored URL")
+
+    # For non-FA sources, fetch the source page normally
+    source_html = None
+    source_text = ""
+    source_images = []
+    if source != "ferrari-approved":
+        source_html = fetch_page(source_url)
+        if not source_html:
+            log.error(f"  Failed to fetch source page")
+            conn.close()
+            return False
+        source_text = extract_text_from_html(source_html)
+        source_images = extract_images_from_html(source_html, source_url)
+    else:
+        # For FA: build a synthetic source_text from the fresh FA listing data
+        # This gives the LLM the basic facts (price, year, colour, mileage, dealer)
+        if fa_fresh_listing:
+            source_text = (
+                f"Ferrari Approved listing\n"
+                f"Model: Ferrari {model_key.replace('-', ' ').title()}\n"
+                f"Year: {fa_fresh_listing.get('year', 'Unknown')}\n"
+                f"Colour: {fa_fresh_listing.get('colour', 'Unknown')}\n"
+                f"Mileage: {fa_fresh_listing.get('mileage', 'Unknown')} miles\n"
+                f"Price: £{fa_fresh_listing.get('asking_price', 0):,}\n"
+                f"Dealer: {fa_fresh_listing.get('dealer_name', 'Unknown')}\n"
+                f"Source: Ferrari Approved UK (preowned.ferrari.com)\n"
+            )
 
     # Step 2: Find and fetch dealer website
     # Priority order:
-    #   1. Dealer registry lookup by dealer name extracted from source HTML (most reliable)
-    #   2. Direct URL from source HTML (AutoTrader "visit dealer" link)
-    #   3. For specialist-dealer source: the source_url IS the dealer page
+    #   1. For FA: use dealer_name from fresh FA scrape → registry lookup
+    #   2. For AutoTrader: registry lookup from HTML, then HTML link extraction
+    #   3. For specialist-dealer: source_url IS the dealer page
     dealer_url = None
     dealer_text = None
     dealer_images = []
@@ -730,9 +831,33 @@ def enrich_listing(listing_id: str, dry_run: bool = False) -> bool:
         dealer_images = source_images
         dealer_page_fetched = True
         log.info(f"  Specialist dealer source — using source page as dealer page")
+    elif source == "ferrari-approved" and fa_fresh_listing:
+        # Use dealer name from fresh FA scrape for registry lookup
+        fa_dealer_name = fa_fresh_listing.get("dealer_name")
+        if fa_dealer_name:
+            registry_url = get_dealer_url_from_registry(fa_dealer_name)
+            if registry_url:
+                dealer_url = registry_url
+                log.info(f"  FA dealer registry lookup: '{fa_dealer_name}' → {dealer_url}")
+            else:
+                log.warning(f"  FA dealer '{fa_dealer_name}' not found in registry — no dealer page")
+        if dealer_url:
+            log.info(f"  Fetching FA dealer page: {dealer_url}")
+            time.sleep(2)
+            dealer_html = fetch_page(dealer_url)
+            # ferraridealers.com subdomains block plain HTTP — fall back to Playwright
+            if not dealer_html and "ferraridealers.com" in dealer_url:
+                log.info(f"  Plain HTTP blocked, retrying with Playwright: {dealer_url}")
+                dealer_html = fetch_page_playwright(dealer_url, wait_ms=4000)
+            if dealer_html:
+                dealer_text = extract_text_from_html(dealer_html)
+                dealer_images = extract_images_from_html(dealer_html, dealer_url)
+                dealer_page_fetched = True
+                log.info(f"  FA dealer page fetched ({len(dealer_images)} images)")
+            else:
+                log.warning(f"  FA dealer page fetch failed: {dealer_url}")
     else:
-        # Try registry lookup first (more reliable than parsing AT HTML)
-        # Quick pass: extract dealer name from source text with a simple regex
+        # AutoTrader or other: extract dealer name from HTML, then registry lookup
         dealer_name_match = re.search(
             r'(?:dealer|sold by|listed by)[:\s]+([A-Z][\w\s&]+?)(?:\n|\.|,|\|)',
             source_text, re.IGNORECASE

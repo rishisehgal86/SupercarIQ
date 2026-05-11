@@ -270,7 +270,7 @@ def phase_1_discovery(dry_run=False):
     """
     Run the discovery scraper to find new/removed listings.
     New listings are inserted into car_listings by discovery_scraper.py.
-    Then we enqueue any unenriched listings for Phase 2.
+    Then immediately enrich ALL unenriched listings inline — no delay.
     """
     log.info("=" * 60)
     log.info("PHASE 1: Discovery")
@@ -286,7 +286,7 @@ def phase_1_discovery(dry_run=False):
         timeout=1800  # 30 min max for discovery (15 models × ~12 dealers × up to 90s each)
     )
     if out:
-        log.info(f"Discovery output:\n{out[-3000:]}")  # last 3000 chars
+        log.info(f"Discovery output:\n{out[-3000:]}")
     if err and rc != 0:
         log.error(f"Discovery errors:\n{err[-2000:]}")
 
@@ -296,8 +296,34 @@ def phase_1_discovery(dry_run=False):
 
     log.info("Discovery complete")
 
-    # Enqueue any new unenriched listings
-    enqueue_unenriched_listings()
+    # Enqueue any unenriched listings (new or previously missed)
+    newly_queued = enqueue_unenriched_listings()
+
+    # Immediately enrich ALL pending items — no stagger, no delay.
+    # Enrichment visits dealer pages (not AutoTrader), so bot-avoidance
+    # staggering is not needed here.
+    queue_depth = get_queue_depth()
+    if queue_depth > 0:
+        log.info(f"Inline enrichment: processing {queue_depth} pending item(s) immediately...")
+        enriched = 0
+        failed = 0
+        for i in range(queue_depth):
+            ok = phase_2_enrich_one(dry_run=dry_run)
+            if ok:
+                enriched += 1
+            else:
+                # If queue is empty (all done) or repeated failures, stop
+                remaining = get_queue_depth()
+                if remaining == 0:
+                    break
+                failed += 1
+                if failed >= 3:
+                    log.warning("3 consecutive enrichment failures — stopping inline enrichment")
+                    break
+        log.info(f"Inline enrichment complete: {enriched} enriched, {failed} failed")
+    else:
+        log.info("No unenriched listings — skipping inline enrichment")
+
     return True
 
 # ── Phase 2: Staggered Enrichment ────────────────────────────────────────────
@@ -595,25 +621,29 @@ def main():
                 log.warning("Phase 1 (discovery) had issues — continuing anyway")
 
         if args.phase in ("2", "all"):
-            queue_depth = get_queue_depth()
-            log.info(f"Queue depth: {queue_depth} pending items")
-            enriched_count = 0
-
-            if queue_depth > 0:
-                for i in range(args.enrich_count):
-                    log.info(f"Enriching item {i+1}/{args.enrich_count}...")
-                    ok = phase_2_enrich_one(dry_run=args.dry_run)
-                    if ok:
-                        enriched_count += 1
-                    else:
-                        break
-                    # Stagger: wait 30 seconds between items in same run
-                    if i < args.enrich_count - 1:
-                        log.info("Waiting 30s before next enrichment...")
-                        time.sleep(30)
+            # Phase 2 is now only used when called explicitly (--phase 2).
+            # In normal 'all' runs, enrichment happens inline in Phase 1.
+            # When called standalone, drain the entire queue.
+            if args.phase == "2":
+                queue_depth = get_queue_depth()
+                log.info(f"Queue depth: {queue_depth} pending items")
+                enriched_count = 0
+                if queue_depth > 0:
+                    log.info(f"Draining queue: enriching all {queue_depth} pending items...")
+                    for i in range(queue_depth):
+                        log.info(f"Enriching item {i+1}/{queue_depth}...")
+                        ok = phase_2_enrich_one(dry_run=args.dry_run)
+                        if ok:
+                            enriched_count += 1
+                        else:
+                            if get_queue_depth() == 0:
+                                break
+                else:
+                    log.info("Queue empty — nothing to enrich")
+                run_stats['enriched'] = enriched_count
             else:
-                log.info("Queue empty — skipping Phase 2")
-            run_stats['enriched'] = enriched_count
+                # In 'all' mode, enrichment already ran inline in Phase 1
+                log.info("Phase 2 skipped in 'all' mode — enrichment ran inline in Phase 1")
 
         if args.phase in ("3", "all"):
             ok = phase_3_regenerate_and_deploy(dry_run=args.dry_run)

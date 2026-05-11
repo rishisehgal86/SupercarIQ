@@ -66,6 +66,14 @@ DEALER_REGISTRY: dict[str, dict] = {
         "stock_url": "https://edinburgh.ferraridealers.com/en-GB/r/used-ferrari/f",
         "notes": "Sytner Group — official Ferrari dealer Scotland",
     },
+    "graypaul glasgow": {
+        "name": "Graypaul Glasgow",
+        "dealer_type": "ferrari-approved",
+        "scraper": "ferraridealers",
+        "base_url": "https://glasgow.ferraridealers.com",
+        "stock_url": "https://glasgow.ferraridealers.com/en-GB/r/used-ferrari/f",
+        "notes": "Sytner Group — official Ferrari dealer Glasgow/Renfrew",
+    },
     "graypaul": {
         "name": "Graypaul",
         "dealer_type": "ferrari-approved",
@@ -169,6 +177,30 @@ DEALER_REGISTRY: dict[str, dict] = {
         "base_url": "https://swindon.ferraridealers.com",
         "stock_url": "https://swindon.ferraridealers.com/en-GB/r/used-ferrari/f",
         "notes": "Dick Lovett fallback",
+    },
+    "jct600 leeds": {
+        "name": "JCT600 Leeds",
+        "dealer_type": "ferrari-approved",
+        "scraper": "ferraridealers",
+        "base_url": "https://leeds.ferraridealers.com",
+        "stock_url": "https://leeds.ferraridealers.com/en-GB/r/used-ferrari/f",
+        "notes": "JCT600 official Ferrari dealer Leeds",
+    },
+    "jct600": {
+        "name": "JCT600",
+        "dealer_type": "ferrari-approved",
+        "scraper": "ferraridealers",
+        "base_url": "https://leeds.ferraridealers.com",
+        "stock_url": "https://leeds.ferraridealers.com/en-GB/r/used-ferrari/f",
+        "notes": "JCT600 fallback (no specific location)",
+    },
+    "charles hurst": {
+        "name": "Charles Hurst",
+        "dealer_type": "ferrari-approved",
+        "scraper": "ferraridealers",
+        "base_url": "https://belfast.ferraridealers.com",
+        "stock_url": "https://belfast.ferraridealers.com/en-GB/r/used-ferrari/f",
+        "notes": "Official Ferrari dealer Belfast, Northern Ireland",
     },
     "ferrari approved": {
         "name": "Ferrari Approved",
@@ -306,6 +338,38 @@ DEALER_REGISTRY: dict[str, dict] = {
         "makes": ["lamborghini", "mclaren", "porsche", "bentley", "rolls-royce", "lotus", "maserati"],
         "notes": "Solihull. Franchise dealer group — Lamborghini, McLaren, Porsche, Bentley, Rolls-Royce, Lotus, Maserati. NO Ferrari.",
     },
+    "alexanders prestige": {
+        "name": "Alexanders Prestige",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.alexandersprestige.co.uk",
+        "stock_url": "https://www.alexandersprestige.co.uk/used-cars/",
+        "notes": "Knutsford, Cheshire. Stocks Ferrari (12Cilindri, Purosangue, 296 GTS), Lamborghini, Porsche, Aston Martin. Static HTML. Car detail URLs at /vehicle/{year}-{reg}-{make}-{model}/",
+    },
+    "bramley motor cars": {
+        "name": "Bramley Motor Cars",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.bramley.com",
+        "stock_url": "https://www.bramley.com/stock",
+        "notes": "Surrey. Stocks Ferrari (430 Scuderia), McLaren, Porsche, Aston Martin. Static HTML. Car detail URLs at /stock/{year}-{make}-{model}/{id}",
+    },
+    "bramley": {
+        "name": "Bramley Motor Cars",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.bramley.com",
+        "stock_url": "https://www.bramley.com/stock",
+        "notes": "Short name alias for Bramley Motor Cars",
+    },
+    "tom hartley": {
+        "name": "Tom Hartley",
+        "dealer_type": "independent-specialist",
+        "scraper": "generic",
+        "base_url": "https://www.tomhartley.com",
+        "stock_url": "https://www.tomhartley.com/used/",
+        "notes": "Derbyshire. Tom Hartley Senior (separate from Tom Hartley Jnr). Stocks ultra-rare Ferrari (SF90 XX, 599 SA Aperta), Lamborghini, Aston Martin, Porsche. Static HTML. Car detail URLs at /used-car-details/{slug}/id-{id}/",
+    },
     # ── Removed dealers (do not re-add without verifying) ────────────────────
     # "premier gt"              — SSL certificate broken at server level (EOF on TLS handshake)
     # "shaks specialist cars"   — Cloudflare bot challenge, completely blocks all scrapers
@@ -317,7 +381,10 @@ DEALER_REGISTRY: dict[str, dict] = {
     # "oakmoore car company"    — Domain resolves but stock page URL unknown; homepage Cloudflare-blocked
     # "foskers"                 — Classic Ferrari only (pre-2000 models), not relevant for modern supercars
     # "hexagon classics"        — Classic cars only (pre-1990s), not relevant for modern supercars
-    # "the supercar rooms"      — Aston Martin heavy, no Ferrari currently stocked
+    # "the supercar rooms"      — JS-rendered + bot protection (Cloudflare), cannot scrape reliably
+    # "scott hardy automotive"  — Cloudflare bot challenge, completely blocks all scrapers
+    # "grange cars"             — Franchise Lamborghini/McLaren/Porsche dealer (JS-rendered); no Ferrari; low priority
+    # "jct600"                  — Official Ferrari franchise dealer; already covered via leeds.ferraridealers.com
 }
 
 
