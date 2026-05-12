@@ -35,6 +35,17 @@ export default function ReportGate({ modelKey, modelLabel, heroImageUrl, childre
   const [phone, setPhone] = useState("");
   const [submitted, setSubmitted] = useState(false);
 
+  // Live listing stats for hero section
+  const { data: liveListings } = trpc.listings.byModel.useQuery({ modelKey });
+  const activeCount = liveListings?.filter(r => !r.soldDate).length ?? null;
+  const lastRefreshed = (() => {
+    if (!liveListings?.length) return null;
+    const dates = liveListings.map(r => r.lastSeenDate).filter(Boolean);
+    if (!dates.length) return null;
+    const latest = dates.sort().at(-1)!;
+    return new Date(latest).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  })();
+
   useEffect(() => {
     // Check localStorage on mount
     if (getUnlockedReports().includes(modelKey)) {
@@ -80,8 +91,20 @@ export default function ReportGate({ modelKey, modelLabel, heroImageUrl, childre
         <div className="absolute inset-0 bg-gradient-to-r from-background/70 to-transparent" />
         <div className="relative container pb-10 pt-28">
           <div className="max-w-2xl">
-            <div className="text-xs font-mono tracking-widest text-primary uppercase mb-3">
-              Full UK Market Analysis
+            <div className="text-xs font-mono tracking-widest text-primary uppercase mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>Full UK Market Analysis</span>
+              {activeCount != null && (
+                <>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span>{activeCount} Active Listings</span>
+                </>
+              )}
+              {lastRefreshed && (
+                <>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span className="text-muted-foreground">Refreshed {lastRefreshed}</span>
+                </>
+              )}
             </div>
             <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl font-black leading-tight mb-4">
               Ferrari<br />

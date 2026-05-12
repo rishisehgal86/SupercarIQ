@@ -1,16 +1,14 @@
 import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar, bigint, float, date, smallint, json } from "drizzle-orm/mysql-core";
 
 /**
- * Core user table — local email/password auth.
- * openId kept for legacy compatibility but nullable.
+ * Core user table backing auth flow.
  */
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).unique(), // nullable — legacy Manus OAuth field
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
-  email: varchar("email", { length: 320 }).unique(),
-  passwordHash: varchar("passwordHash", { length: 256 }), // bcrypt hash — null for legacy OAuth users
-  loginMethod: varchar("loginMethod", { length: 64 }).default("local"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -74,14 +72,14 @@ export type InsertNegotiationBrief = typeof negotiationBriefs.$inferInsert;
 
 /**
  * car_listings — master registry. One row per car ever seen, never deleted.
- * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold, archived = fully archived (no longer listed), incomplete_data = listing found but insufficient spec data to display publicly
+ * status: active = currently listed, pending_sold = absent 1-2 days, sold = confirmed sold
  */
 export const carListings = mysqlTable("car_listings", {
   id: varchar("id", { length: 64 }).primaryKey(), // e.g. "812-AT-170683"
   sourceUrl: varchar("sourceUrl", { length: 1024 }).notNull(),
   modelKey: varchar("modelKey", { length: 64 }).notNull(), // e.g. "812-superfast"
   source: varchar("source", { length: 32 }).notNull().default("autotrader"), // "autotrader" | "ferrari-approved"
-  status: mysqlEnum("status", ["active", "pending_sold", "sold", "archived", "incomplete_data"]).notNull().default("active"),
+  status: mysqlEnum("status", ["active", "pending_sold", "sold"]).notNull().default("active"),
   askingPrice: int("askingPrice").notNull(),
   year: smallint("year"),
   colour: varchar("colour", { length: 128 }),
@@ -89,7 +87,6 @@ export const carListings = mysqlTable("car_listings", {
   firstSeenDate: date("firstSeenDate").notNull(),
   lastSeenDate: date("lastSeenDate").notNull(),
   soldDate: date("soldDate"),
-  archivedAt: timestamp("archivedAt"), // set when status moves to 'archived'
   consecutiveAbsentDays: smallint("consecutiveAbsentDays").notNull().default(0),
   daysOnMarket: int("daysOnMarket"), // calculated on sold
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -125,14 +122,6 @@ export const carListingDetails = mysqlTable("car_listing_details", {
   ccb: boolean("ccb").default(false),
   suspensionLift: boolean("suspensionLift").default(false),
   atelierCar: boolean("atelierCar").default(false),
-  magnetorheologicalSuspension: boolean("magnetorheologicalSuspension").default(false),
-  rearWheelSteering: boolean("rearWheelSteering").default(false),
-  trackPack: boolean("trackPack").default(false),
-  limitedEdition: boolean("limitedEdition").default(false),
-  seats: varchar("seats", { length: 32 }), // "2-seat" | "2+2"
-  warrantyExpiry: varchar("warrantyExpiry", { length: 64 }),
-  dealerLocation: varchar("dealerLocation", { length: 256 }),
-  thumbnailUrl: varchar("thumbnailUrl", { length: 512 }), // primary listing image
   dataConfidence: varchar("dataConfidence", { length: 16 }).default("estimated"),
   equipmentJson: json("equipmentJson"), // string[]
   imagesJson: json("imagesJson"), // string[]

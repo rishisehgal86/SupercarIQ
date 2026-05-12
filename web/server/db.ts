@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, gte, sql, or, inArray } from "drizzle-orm";
+import { and, eq, desc, asc, gte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool } from "mysql2";
 import {
@@ -16,53 +16,52 @@ import {
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _pipelineDb: ReturnType<typeof drizzle> | null = null;
 
-/** Build a DATABASE_URL from Railway's individual MySQL env vars if DATABASE_URL is not set.
- *  Railway uses two naming styles:
- *    - MYSQLHOST, MYSQLPORT, MYSQLUSER, MYSQLPASSWORD  (no underscore between words)
- *    - MYSQL_DATABASE                                   (with underscore)
- *  We check both styles for maximum compatibility.
- */
-function resolveDbUrl(): string | undefined {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  // Support both MYSQLHOST (Railway style) and MYSQL_HOST (standard style)
-  const host = process.env.MYSQLHOST      ?? process.env.MYSQL_HOST;
-  const port = process.env.MYSQLPORT      ?? process.env.MYSQL_PORT      ?? '3306';
-  const user = process.env.MYSQLUSER      ?? process.env.MYSQL_USER;
-  const pass = process.env.MYSQLPASSWORD  ?? process.env.MYSQL_PASSWORD;
-  const db   = process.env.MYSQL_DATABASE ?? process.env.MYSQLDATABASE;
-  if (host && user && pass && db) {
-    const encoded = encodeURIComponent(pass);
-    const url = `mysql://${user}:${encoded}@${host}:${port}/${db}`;
-    console.log(`[Database] Using Railway MySQL vars → ${host}:${port}/${db}`);
-    return url;
-  }
-  return undefined;
-}
-
+/** Main app DB (Manus TiDB / Railway MySQL depending on environment) */
 export async function getDb() {
-  if (!_db) {
-    const dbUrl = resolveDbUrl();
-    if (dbUrl) {
-      try {
-        // Railway MySQL proxy does not use SSL — ssl_disabled prevents connection drops.
-        // For other environments (Manus TiDB), ssl_disabled is also safe as TiDB
-        // accepts non-SSL connections on the internal network.
-        const pool = createPool({
-          uri: dbUrl,
-          ssl: { rejectUnauthorized: false },
-          enableKeepAlive: true,
-          waitForConnections: true,
-          connectionLimit: 10,
-        });
-        _db = drizzle(pool);
-      } catch (error) {
-        console.warn("[Database] Failed to connect:", error);
-        _db = null;
-      }
+  if (!_db && process.env.DATABASE_URL) {
+    try {
+      // Railway MySQL proxy does not use SSL — ssl_disabled prevents connection drops.
+      // For other environments (Manus TiDB), ssl_disabled is also safe as TiDB
+      // accepts non-SSL connections on the internal network.
+      const pool = createPool({
+        uri: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        enableKeepAlive: true,
+        waitForConnections: true,
+        connectionLimit: 10,
+      });
+      _db = drizzle(pool);
+    } catch (error) {
+      console.warn("[Database] Failed to connect:", error);
+      _db = null;
     }
   }
   return _db;
+}
+
+/** Pipeline DB (Railway MySQL) — used for car_listings and car_listing_details */
+export async function getPipelineDb() {
+  const pipelineUrl = process.env.RAILWAY_DATABASE_URL;
+  // If no separate pipeline URL, fall back to main DB (works on Railway where they're the same)
+  if (!pipelineUrl) return getDb();
+  if (!_pipelineDb) {
+    try {
+      const pool = createPool({
+        uri: pipelineUrl,
+        ssl: { rejectUnauthorized: false },
+        enableKeepAlive: true,
+        waitForConnections: true,
+        connectionLimit: 5,
+      });
+      _pipelineDb = drizzle(pool);
+    } catch (error) {
+      console.warn('[Database] Failed to connect to pipeline DB:', error);
+      _pipelineDb = null;
+    }
+  }
+  return _pipelineDb;
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -102,44 +101,6 @@ export async function getUserByOpenId(openId: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result.length > 0 ? result[0] : undefined;
-}
-
-/** Get a user by email (for local auth login). */
-export async function getUserByEmail(email: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
-}
-
-/** Get a user by ID (for session lookup). */
-export async function getUserById(id: number) {
-  const db = await getDb();
-  if (!db) return null;
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  return result.length > 0 ? result[0] : null;
-}
-
-/** Create a new local auth user. Returns the created user. */
-export async function createUser(data: { email: string; name: string; passwordHash: string; loginMethod: string; role: 'user' | 'admin' }) {
-  const db = await getDb();
-  if (!db) return null;
-  await db.insert(users).values({
-    email: data.email,
-    name: data.name,
-    passwordHash: data.passwordHash,
-    loginMethod: data.loginMethod,
-    role: data.role,
-    openId: null,
-  });
-  return getUserByEmail(data.email);
-}
-
-/** Update a user's lastSignedIn timestamp. */
-export async function updateUserLastSignedIn(userId: number) {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, userId));
 }
 
 // ─── Watchlist ────────────────────────────────────────────────────────────────
@@ -234,7 +195,7 @@ export async function saveNegotiationBrief(brief: InsertNegotiationBrief) {
 
 /** Get all active listings for a model, joined with their details, ordered by score desc. */
 export async function getActiveListingsByModel(modelKey: string) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const rows = await db
     .select()
@@ -247,7 +208,7 @@ export async function getActiveListingsByModel(modelKey: string) {
 
 /** Get a single listing with its details by listing ID. */
 export async function getListingById(listingId: string) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return null;
   const rows = await db
     .select()
@@ -259,40 +220,37 @@ export async function getListingById(listingId: string) {
   return { ...rows[0].car_listings, details: rows[0].car_listing_details };
 }
 
-/** Get sold/archived listings for a model (sold + archived = full archive). */
+/** Get sold listings for a model (sold archive). */
 export async function getSoldListingsByModel(modelKey: string, limit = 50) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const rows = await db
     .select()
     .from(carListings)
     .leftJoin(carListingDetails, eq(carListings.id, carListingDetails.listingId))
-    .where(and(
-      eq(carListings.modelKey, modelKey),
-      inArray(carListings.status, ["sold", "archived"])
-    ))
-    .orderBy(desc(carListings.archivedAt), desc(carListings.soldDate))
+    .where(and(eq(carListings.modelKey, modelKey), eq(carListings.status, "sold")))
+    .orderBy(desc(carListings.soldDate))
     .limit(limit);
   return rows.map(r => ({ ...r.car_listings, details: r.car_listing_details }));
 }
 
-/** Get all sold/archived listings across all models. */
+/** Get all sold listings across all models. */
 export async function getAllSoldListings(limit = 100) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const rows = await db
     .select()
     .from(carListings)
     .leftJoin(carListingDetails, eq(carListings.id, carListingDetails.listingId))
-    .where(inArray(carListings.status, ["sold", "archived"]))
-    .orderBy(desc(carListings.archivedAt), desc(carListings.soldDate))
+    .where(eq(carListings.status, "sold"))
+    .orderBy(desc(carListings.soldDate))
     .limit(limit);
   return rows.map(r => ({ ...r.car_listings, details: r.car_listing_details }));
 }
 
 /** Get price history for a specific listing (car_price_snapshots_v2). */
 export async function getListingPriceHistory(listingId: string) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   return db
     .select()
@@ -303,7 +261,7 @@ export async function getListingPriceHistory(listingId: string) {
 
 /** Get market daily stats for a model over the last N days. */
 export async function getMarketDailyStats(modelKey: string, days = 90) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
@@ -320,7 +278,7 @@ export async function getMarketDailyStats(modelKey: string, days = 90) {
 
 /** Get the latest market stats for all models (for the landing page). */
 export async function getLatestMarketStatsAllModels() {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const subquery = db
     .select({
@@ -346,7 +304,7 @@ export async function getLatestMarketStatsAllModels() {
 
 /** Get aggregate stats for a model: active count, avg price, median price, best IIV gap. */
 export async function getModelSummaryStats(modelKey: string) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return null;
   const rows = await db
     .select({
@@ -383,7 +341,7 @@ export async function getModelSummaryStats(modelKey: string) {
 
 /** Get the top-ranked active listing for a model (highest totalScore). */
 export async function getTopListingForModel(modelKey: string) {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return null;
   const rows = await db
     .select()
@@ -398,7 +356,7 @@ export async function getTopListingForModel(modelKey: string) {
 
 /** Get all active listings across all models (global overview). */
 export async function getAllActiveListings() {
-  const db = await getDb();
+  const db = await getPipelineDb();
   if (!db) return [];
   const rows = await db
     .select()
@@ -447,9 +405,9 @@ export async function getAllLeads(limit = 500) {
 /** Get pipeline status: last N runs + live queue depth from car_listings. */
 export async function getPipelineStatus() {
   const db = await getDb();
-  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0, archivedListings: 0, incompleteDataListings: 0 };
+  if (!db) return { runs: [], queueDepth: 0, activeListings: 0, pendingSoldListings: 0 };
 
-  const [runs, queueRows, activeRows, pendingSoldRows, archivedRows, incompleteRows] = await Promise.all([
+  const [runs, queueRows, activeRows, pendingSoldRows] = await Promise.all([
     // Last 20 pipeline runs
     db.select().from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(20),
     // Queue depth = active listings without enrichment (no iiv set)
@@ -465,14 +423,6 @@ export async function getPipelineStatus() {
     db.select({ count: sql<number>`COUNT(*)` })
       .from(carListings)
       .where(eq(carListings.status, 'pending_sold')),
-    // Archived listings
-    db.select({ count: sql<number>`COUNT(*)` })
-      .from(carListings)
-      .where(eq(carListings.status, 'archived')),
-    // Incomplete data listings (found but insufficient spec data — hidden from public)
-    db.select({ count: sql<number>`COUNT(*)` })
-      .from(carListings)
-      .where(eq(carListings.status, 'incomplete_data')),
   ]);
 
   return {
@@ -480,8 +430,6 @@ export async function getPipelineStatus() {
     queueDepth: Number(queueRows[0]?.count ?? 0),
     activeListings: Number(activeRows[0]?.count ?? 0),
     pendingSoldListings: Number(pendingSoldRows[0]?.count ?? 0),
-    archivedListings: Number(archivedRows[0]?.count ?? 0),
-    incompleteDataListings: Number(incompleteRows[0]?.count ?? 0),
   };
 }
 

@@ -1,55 +1,58 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { trpc } from "@/lib/trpc";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2 } from "lucide-react";
-
-type Mode = "login" | "register";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { trpc } from "@/lib/trpc";
 
 export default function Login() {
   const [, navigate] = useLocation();
-  const [mode, setMode] = useState<Mode>("login");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const meQuery = trpc.auth.me.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
-  const utils = trpc.useUtils();
+  // Check if already logged in
+  const { data: user, isLoading: checkingAuth } = trpc.auth.me.useQuery(undefined, {
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 
+  // Get returnTo from query string
   const returnTo = (() => {
-    if (typeof window === "undefined") return "/";
+    if (typeof window === "undefined") return "/admin/leads";
     const params = new URLSearchParams(window.location.search);
-    return params.get("returnTo") ?? "/";
+    return params.get("returnTo") ?? "/admin/leads";
   })();
 
+  // Redirect if already authenticated
   useEffect(() => {
-    if (meQuery.data) navigate(returnTo);
-  }, [meQuery.data, navigate, returnTo]);
+    if (user) {
+      navigate(returnTo);
+    }
+  }, [user, navigate, returnTo]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
     try {
-      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
-      const body = mode === "login" ? { email, password } : { name, email, password };
-      const res = await fetch(endpoint, {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ username, password }),
       });
-      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        setError(data.error ?? (mode === "login" ? "Login failed." : "Registration failed."));
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Login failed. Please check your credentials.");
         return;
       }
-      await utils.auth.me.invalidate();
+
+      // Redirect to returnTo or admin panel
       window.location.href = returnTo;
     } catch {
       setError("Network error. Please try again.");
@@ -58,10 +61,10 @@ export default function Login() {
     }
   };
 
-  if (meQuery.isLoading) {
+  if (checkingAuth) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <div className="text-muted-foreground text-sm">Loading…</div>
       </div>
     );
   }
@@ -69,64 +72,46 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
+        {/* Brand mark */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2 mb-2">
             <div className="w-1 h-6 bg-primary" />
-            <span className="font-serif font-bold text-lg tracking-wide text-foreground">SupercarIQ</span>
+            <span className="font-serif font-bold text-lg tracking-wide text-foreground">
+              SupercarIQ
+            </span>
           </div>
           <p className="text-xs text-muted-foreground tracking-widest uppercase">
-            {mode === "login" ? "Sign in to your account" : "Create your account"}
+            Admin Access
           </p>
         </div>
 
-        <Card className="border-border bg-card shadow-sm">
+        <Card className="border-border bg-card">
           <CardHeader className="pb-4">
-            <CardTitle className="text-base font-semibold">
-              {mode === "login" ? "Welcome back" : "Get started"}
-            </CardTitle>
+            <CardTitle className="text-base font-semibold">Sign In</CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
-              {mode === "login"
-                ? "Access in-depth supercar investment analysis."
-                : "Create a free account to unlock all reports."}
+              Enter your admin credentials to continue.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {mode === "register" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Your name
-                  </Label>
-                  <Input
-                    id="name"
-                    type="text"
-                    autoComplete="name"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="John Smith"
-                    disabled={loading}
-                    className="bg-background border-border"
-                  />
-                </div>
-              )}
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Email address
+                <Label htmlFor="username" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Username
                 </Label>
                 <Input
-                  id="email"
-                  type="email"
-                  autoComplete="email"
-                  autoFocus={mode === "login"}
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  autoFocus
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="admin"
                   required
                   disabled={loading}
-                  className="bg-background border-border"
+                  className="bg-background border-border text-foreground"
                 />
               </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="password" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Password
@@ -134,54 +119,43 @@ export default function Login() {
                 <Input
                   id="password"
                   type="password"
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  autoComplete="current-password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  minLength={8}
                   disabled={loading}
-                  className="bg-background border-border"
+                  className="bg-background border-border text-foreground"
                 />
-                {mode === "register" && (
-                  <p className="text-[10px] text-muted-foreground">Minimum 8 characters</p>
-                )}
               </div>
 
               {error && (
-                <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+                <div className="text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">
                   {error}
                 </div>
               )}
 
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading || !username || !password}
+              >
                 {loading ? (
                   <span className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {mode === "login" ? "Signing in…" : "Creating account…"}
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Signing in…
                   </span>
-                ) : (
-                  mode === "login" ? "Sign In" : "Create Account"
-                )}
+                ) : "Sign In"}
               </Button>
             </form>
-
-            <div className="mt-4 text-center">
-              <button
-                type="button"
-                onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }}
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {mode === "login"
-                  ? "Don't have an account? Register free"
-                  : "Already have an account? Sign in"}
-              </button>
-            </div>
           </CardContent>
         </Card>
 
         <p className="text-center text-[10px] text-muted-foreground mt-6">
-          SupercarIQ · UK Supercar Investment Analysis
+          SupercarIQ · UK Car Investment Analysis
         </p>
       </div>
     </div>

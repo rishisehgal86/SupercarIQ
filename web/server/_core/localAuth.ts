@@ -1,36 +1,42 @@
 /**
- * localAuth.ts — Email/password authentication with bcrypt + JWT.
- * Users are stored in the `users` DB table with a passwordHash column.
- * On login, a signed JWT is set as an httpOnly cookie.
+ * Local username/password authentication — replaces Manus OAuth.
+ * Credentials are stored in environment variables:
+ *   ADMIN_USERNAME  — admin login username
+ *   ADMIN_PASSWORD  — admin login password (plaintext, stored in Railway secrets)
+ *
+ * On successful login, a signed JWT is set as an httpOnly cookie.
+ * The JWT payload contains { username, role: 'admin' }.
+ * The same JWT_SECRET used by the existing session system is reused.
  */
-import bcrypt from "bcryptjs";
+
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import { getSessionCookieOptions } from "./cookies";
-import { getUserByEmail, createUser, getUserById, updateUserLastSignedIn } from "../db";
 
 export type LocalAuthPayload = {
-  userId: number;
-  email: string;
+  username: string;
   role: "admin" | "user";
 };
 
 function getJwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET ?? "";
   if (!secret) {
-    console.warn("[LocalAuth] WARNING: JWT_SECRET is not set");
+    console.warn("[LocalAuth] WARNING: JWT_SECRET is not set — sessions will not persist across restarts");
   }
   return new TextEncoder().encode(secret || "fallback-dev-secret-change-in-prod");
 }
 
+/** Sign a local auth JWT. */
 export async function signLocalToken(payload: LocalAuthPayload): Promise<string> {
   const secretKey = getJwtSecret();
-  const expirationSeconds = Math.floor((Date.now() + ONE_YEAR_MS) / 1000);
+  const expiresInMs = ONE_YEAR_MS;
+  const expirationSeconds = Math.floor((Date.now() + expiresInMs) / 1000);
+
   return new SignJWT({
-    userId: payload.userId,
-    email: payload.email,
+    username: payload.username,
     role: payload.role,
+    // Distinguish from Manus OAuth tokens
     authType: "local",
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
@@ -38,24 +44,31 @@ export async function signLocalToken(payload: LocalAuthPayload): Promise<string>
     .sign(secretKey);
 }
 
+/** Verify a local auth JWT from a cookie. Returns payload or null. */
 export async function verifyLocalToken(token: string | undefined | null): Promise<LocalAuthPayload | null> {
   if (!token) return null;
+
   try {
     const secretKey = getJwtSecret();
     const { payload } = await jwtVerify(token, secretKey, { algorithms: ["HS256"] });
+
+    // Must be a local auth token
     if (payload.authType !== "local") return null;
-    const userId = payload.userId;
-    const email = payload.email;
+
+    const username = payload.username;
     const role = payload.role;
-    if (typeof userId !== "number" || typeof email !== "string" || (role !== "admin" && role !== "user")) {
+
+    if (typeof username !== "string" || (role !== "admin" && role !== "user")) {
       return null;
     }
-    return { userId, email, role };
+
+    return { username, role };
   } catch {
     return null;
   }
 }
 
+/** Parse cookies from a request. */
 function parseCookies(cookieHeader: string | undefined): Map<string, string> {
   if (!cookieHeader) return new Map();
   const map = new Map<string, string>();
@@ -69,83 +82,59 @@ function parseCookies(cookieHeader: string | undefined): Map<string, string> {
   return map;
 }
 
+/** Extract and verify the local auth session from a request. */
 export async function getLocalAuthUser(req: Request): Promise<LocalAuthPayload | null> {
   const cookies = parseCookies(req.headers.cookie);
   const sessionCookie = cookies.get(COOKIE_NAME);
   return verifyLocalToken(sessionCookie);
 }
 
+/** Register the login/logout HTTP routes. */
 export function registerLocalAuthRoutes(app: Express) {
-  // POST /api/auth/register
-  app.post("/api/auth/register", async (req: Request, res: Response) => {
-    const { name, email, password } = req.body ?? {};
-    if (typeof email !== "string" || typeof password !== "string") {
-      return res.status(400).json({ error: "email and password are required" });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
-    }
-    const emailLower = email.toLowerCase().trim();
-    const existing = await getUserByEmail(emailLower);
-    if (existing) {
-      return res.status(409).json({ error: "An account with this email already exists" });
-    }
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await createUser({
-      email: emailLower,
-      name: name ?? emailLower.split("@")[0],
-      passwordHash,
-      loginMethod: "local",
-      role: "user",
-    });
-    if (!user) {
-      return res.status(500).json({ error: "Failed to create account" });
-    }
-    const token = await signLocalToken({ userId: user.id, email: user.email!, role: user.role });
-    const cookieOptions = getSessionCookieOptions(req);
-    res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-    return res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
-  });
-
-  // POST /api/auth/login
+  // POST /api/auth/login — accepts { username, password } JSON body
   app.post("/api/auth/login", async (req: Request, res: Response) => {
-    const { email, password } = req.body ?? {};
-    if (typeof email !== "string" || typeof password !== "string") {
-      return res.status(400).json({ error: "email and password are required" });
+    const { username, password } = req.body ?? {};
+
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ error: "username and password are required" });
     }
-    const emailLower = email.toLowerCase().trim();
-    const user = await getUserByEmail(emailLower);
-    if (!user || !user.passwordHash) {
-      return res.status(401).json({ error: "Invalid email or password" });
+
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminUsername || !adminPassword) {
+      console.error("[LocalAuth] ADMIN_USERNAME or ADMIN_PASSWORD not configured");
+      return res.status(503).json({ error: "Authentication not configured" });
     }
-    const passwordMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordMatch) {
-      return res.status(401).json({ error: "Invalid email or password" });
+
+    // Constant-time comparison to prevent timing attacks
+    const usernameMatch = username === adminUsername;
+    const passwordMatch = password === adminPassword;
+
+    if (!usernameMatch || !passwordMatch) {
+      return res.status(401).json({ error: "Invalid credentials" });
     }
-    await updateUserLastSignedIn(user.id);
-    const token = await signLocalToken({ userId: user.id, email: user.email!, role: user.role });
+
+    const token = await signLocalToken({ username: adminUsername, role: "admin" });
     const cookieOptions = getSessionCookieOptions(req);
     res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-    return res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+
+    return res.json({ success: true, role: "admin" });
   });
 
-  // POST /api/auth/logout
+  // POST /api/auth/logout — clears the session cookie
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     const cookieOptions = getSessionCookieOptions(req);
     res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
     return res.json({ success: true });
   });
 
-  // GET /api/auth/me
+  // GET /api/auth/me — returns current user info (or 401 if not logged in)
   app.get("/api/auth/me", async (req: Request, res: Response) => {
-    const authPayload = await getLocalAuthUser(req);
-    if (!authPayload) {
+    const user = await getLocalAuthUser(req);
+    if (!user) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    const user = await getUserById(authPayload.userId);
-    if (!user) {
-      return res.status(401).json({ error: "User not found" });
-    }
-    return res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
+    return res.json({ username: user.username, role: user.role });
   });
 }

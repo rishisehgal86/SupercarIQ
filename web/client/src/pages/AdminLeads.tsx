@@ -115,7 +115,7 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const [runPhase, setRunPhase] = useState<'all' | '1' | '2' | '3'>('all');
   const [dryRun, setDryRun] = useState(false);
-  const [lastTriggered, setLastTriggered] = useState<{ pid: number | null; logFile: string; startedAt: string | Date; dryRun: boolean } | null>(null);
+  const [lastTriggered, setLastTriggered] = useState<{ pid: number | null; logFile: string; startedAt: Date; dryRun: boolean } | null>(null);
   const [viewingLog, setViewingLog] = useState<string | null>(null);
 
   const triggerMutation = trpc.pipeline.triggerRun.useMutation({
@@ -163,7 +163,7 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
             <option value="all">All phases</option>
             <option value="1">Phase 1 — Discovery only</option>
             <option value="2">Phase 2 — Enrich only</option>
-            <option value="3">Phase 3 — LLM Content + Market Stats</option>
+            <option value="3">Phase 3 — Regen TS + Deploy</option>
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
             <input
@@ -227,7 +227,7 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
       ) : (
         <>
           {/* Summary stat cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-px bg-border border-b border-border">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border border-b border-border">
             <div className="bg-card px-5 py-4">
               <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
                 Active Listings
@@ -248,26 +248,8 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
               <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
                 Pending Sold
               </div>
-              <div className="font-serif text-2xl font-bold text-amber-600">
+              <div className="font-serif text-2xl font-bold text-foreground">
                 {data.pendingSoldListings}
-              </div>
-            </div>
-            <div className="bg-card px-5 py-4">
-              <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
-                Archived
-              </div>
-              <div className="font-serif text-2xl font-bold text-muted-foreground">
-                {data.archivedListings ?? 0}
-              </div>
-            </div>
-            <div className="bg-card px-5 py-4">
-              <div className="text-xs text-muted-foreground tracking-widest uppercase mb-1">
-                Incomplete Data
-              </div>
-              <div className={`font-serif text-2xl font-bold ${
-                (data.incompleteDataListings ?? 0) > 0 ? "text-red-500" : "text-emerald-600"
-              }`}>
-                {data.incompleteDataListings ?? 0}
               </div>
             </div>
             <div className="bg-card px-5 py-4">
@@ -340,8 +322,8 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
                       .replace('Z', '');
                     const logFile = (run as any).logFilePath ||
                       (run.runType === 'manual'
-                        ? `/tmp/smart_pipeline_admin_${logTimestamp}.log`
-                        : `/tmp/smart_pipeline_cron_${logTimestamp}.log`);
+                        ? `/home/ubuntu/ferrari-pipeline/logs/smart_pipeline_admin_${logTimestamp}.log`
+                        : `/home/ubuntu/ferrari-pipeline/logs/smart_pipeline_cron_${logTimestamp}.log`);
                     return (
                     <TableRow key={run.id} className={run.status === "failed" ? "bg-red-50/30" : ""}>
                       <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
@@ -404,285 +386,11 @@ function PipelineStatusPanel({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-// ─── Model Config Panel ──────────────────────────────────────────
-const VERDICT_OPTIONS = [
-  { value: "strong-buy", label: "Strong Buy" },
-  { value: "buy", label: "Buy" },
-  { value: "consider", label: "Consider" },
-  { value: "avoid", label: "Avoid" },
-];
-
-const VERDICT_COLORS: Record<string, string> = {
-  "strong-buy": "bg-emerald-100 text-emerald-700 border-emerald-300",
-  "buy": "bg-blue-100 text-blue-700 border-blue-300",
-  "consider": "bg-amber-100 text-amber-700 border-amber-300",
-  "avoid": "bg-red-100 text-red-700 border-red-300",
-};
-
-type ModelConfigRow = {
-  modelKey: string;
-  make: string;
-  model: string;
-  yearMin: number;
-  yearMax: number;
-  engineSpec?: string | null;
-  heroImageUrl?: string | null;
-  investmentVerdict?: string | null;
-  isPublic?: boolean | null;
-  isActive?: boolean | null;
-  sortOrder?: number | null;
-};
-
-function ModelConfigCard({
-  config,
-  onSaved,
-}: {
-  config: ModelConfigRow;
-  onSaved: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [heroImageUrl, setHeroImageUrl] = useState(config.heroImageUrl ?? "");
-  const [investmentVerdict, setInvestmentVerdict] = useState(config.investmentVerdict ?? "consider");
-  const [isPublic, setIsPublic] = useState(config.isPublic ?? false);
-  const [isActive, setIsActive] = useState(config.isActive ?? true);
-  const [sortOrder, setSortOrder] = useState(String(config.sortOrder ?? 0));
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-
-  const upsert = trpc.models.upsert.useMutation({
-    onSuccess: () => {
-      setSaving(false);
-      setEditing(false);
-      setSaveError("");
-      onSaved();
-    },
-    onError: (err) => {
-      setSaving(false);
-      setSaveError(err.message);
-    },
-  });
-
-  const handleSave = () => {
-    setSaving(true);
-    setSaveError("");
-    upsert.mutate({
-      modelKey: config.modelKey,
-      make: config.make,
-      model: config.model,
-      yearMin: config.yearMin,
-      yearMax: config.yearMax,
-      heroImageUrl: heroImageUrl || undefined,
-      investmentVerdict,
-      isPublic,
-      isActive,
-      sortOrder: parseInt(sortOrder, 10) || 0,
-    });
-  };
-
-  const handleCancel = () => {
-    setHeroImageUrl(config.heroImageUrl ?? "");
-    setInvestmentVerdict(config.investmentVerdict ?? "consider");
-    setIsPublic(config.isPublic ?? false);
-    setIsActive(config.isActive ?? true);
-    setSortOrder(String(config.sortOrder ?? 0));
-    setEditing(false);
-    setSaveError("");
-  };
-
-  const verdictCls = VERDICT_COLORS[investmentVerdict] ?? VERDICT_COLORS["consider"];
-
-  return (
-    <div className="bg-card border border-border overflow-hidden">
-      {/* Hero image preview */}
-      <div className="relative h-32 bg-muted overflow-hidden">
-        {heroImageUrl ? (
-          <img
-            src={heroImageUrl}
-            alt={`${config.make} ${config.model}`}
-            className="w-full h-full object-cover"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-muted-foreground/30">
-            <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-          </div>
-        )}
-        {/* Badges overlay */}
-        <div className="absolute top-2 left-2 flex gap-1.5 flex-wrap">
-          {!isActive && (
-            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase bg-zinc-800/80 text-zinc-200 rounded-sm">Inactive</span>
-          )}
-          {!isPublic && (
-            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase bg-amber-700/80 text-amber-100 rounded-sm">Gated</span>
-          )}
-        </div>
-        <div className="absolute top-2 right-2">
-          <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase border rounded-sm ${verdictCls}`}>
-            {investmentVerdict?.replace("-", " ") ?? "—"}
-          </span>
-        </div>
-      </div>
-
-      {/* Card body */}
-      <div className="p-4 space-y-3">
-        <div>
-          <div className="font-serif font-bold text-sm text-foreground">{config.make} {config.model}</div>
-          <div className="text-xs text-muted-foreground font-mono">{config.modelKey}</div>
-          <div className="text-xs text-muted-foreground mt-0.5">{config.yearMin}–{config.yearMax}</div>
-        </div>
-
-        {editing ? (
-          <div className="space-y-3">
-            {/* Hero Image URL */}
-            <div>
-              <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Hero Image URL</label>
-              <Input
-                value={heroImageUrl}
-                onChange={(e) => setHeroImageUrl(e.target.value)}
-                placeholder="https://cdn.example.com/image.jpg"
-                className="text-xs h-7"
-              />
-            </div>
-
-            {/* Verdict */}
-            <div>
-              <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Investment Verdict</label>
-              <select
-                value={investmentVerdict}
-                onChange={(e) => setInvestmentVerdict(e.target.value)}
-                className="w-full h-7 px-2 text-xs bg-background border border-input rounded-sm focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {VERDICT_OPTIONS.map((v) => (
-                  <option key={v.value} value={v.value}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Sort Order */}
-            <div>
-              <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Sort Order</label>
-              <Input
-                type="number"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                className="text-xs h-7 w-20"
-              />
-            </div>
-
-            {/* Toggles */}
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={isPublic}
-                  onChange={(e) => setIsPublic(e.target.checked)}
-                  className="w-3.5 h-3.5 accent-primary"
-                />
-                <span className="text-foreground">Public (ungated)</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={isActive}
-                  onChange={(e) => setIsActive(e.target.checked)}
-                  className="w-3.5 h-3.5 accent-primary"
-                />
-                <span className="text-foreground">Active</span>
-              </label>
-            </div>
-
-            {saveError && (
-              <p className="text-xs text-red-600">{saveError}</p>
-            )}
-
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleSave} disabled={saving} className="flex-1">
-                {saving ? "Saving…" : "Save"}
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleCancel} disabled={saving}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full text-xs"
-            onClick={() => setEditing(true)}
-          >
-            Edit Config
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ModelConfigPanel() {
-  const { data: models, isLoading, refetch } = trpc.models.all.useQuery();
-
-  if (isLoading) {
-    return (
-      <div className="py-12 text-center text-sm text-muted-foreground">Loading model configs…</div>
-    );
-  }
-
-  if (!models || models.length === 0) {
-    return (
-      <div className="py-12 text-center border border-dashed border-border rounded">
-        <p className="text-sm text-muted-foreground">No model configs found.</p>
-        <p className="text-xs text-muted-foreground mt-1">Run the pipeline to seed model configs, or add them manually via SQL.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-serif text-lg font-bold">Model Configuration</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {models.length} model{models.length !== 1 ? "s" : ""} · Edit hero images, verdicts, gating, and sort order
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()}>
-          Refresh
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {models.map((m) => (
-          <ModelConfigCard
-            key={m.modelKey}
-            config={{
-              modelKey: m.modelKey,
-              make: m.make,
-              model: m.model,
-              yearMin: m.yearMin,
-              yearMax: m.yearMax,
-              engineSpec: m.engineSpec,
-              heroImageUrl: m.heroImageUrl,
-              investmentVerdict: m.investmentVerdict,
-              isPublic: m.isPublic,
-              isActive: m.isActive,
-              sortOrder: m.sortOrder,
-            }}
-            onSaved={() => refetch()}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Admin Page ──────────────────────────────────────────────
+// ─── Main Admin Page ──────────────────────────────────────────────────────────
 export default function AdminLeads() {
   const { user, loading } = useAuth();
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"leads" | "pipeline" | "models">("leads");
+  const [activeTab, setActiveTab] = useState<"leads" | "pipeline">("leads");
 
   const { data: leads, isLoading } = trpc.leads.adminList.useQuery(undefined, {
     enabled: !!user && user.role === "admin",
@@ -761,7 +469,7 @@ export default function AdminLeads() {
                       `"${l.phone ?? ""}"`,
                       `"${l.modelLabel}"`,
                       `"${l.source ?? ""}"`,
-                      `"${formatDate(l.createdAt as Date | number | string)}"`,
+                      `"${formatDate(l.createdAt instanceof Date ? l.createdAt.getTime() : l.createdAt)}"`,
                     ].join(",")
                   ),
                 ].join("\n");
@@ -806,16 +514,6 @@ export default function AdminLeads() {
               }`}
             >
               Pipeline Status
-            </button>
-            <button
-              onClick={() => setActiveTab("models")}
-              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === "models"
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Model Config
             </button>
           </div>
         </div>
@@ -906,7 +604,7 @@ export default function AdminLeads() {
                           {lead.source ?? "report-gate"}
                         </TableCell>
                         <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">
-                          {formatDate(lead.createdAt as Date | number | string)}
+                          {formatDate(lead.createdAt instanceof Date ? lead.createdAt.getTime() : lead.createdAt)}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -920,11 +618,6 @@ export default function AdminLeads() {
         {/* ── Pipeline Tab ── */}
         {activeTab === "pipeline" && (
           <PipelineStatusPanel isAdmin={user.role === "admin"} />
-        )}
-
-        {/* ── Model Config Tab ── */}
-        {activeTab === "models" && (
-          <ModelConfigPanel />
         )}
       </div>
     </div>

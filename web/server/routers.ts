@@ -364,7 +364,7 @@ export const appRouter = router({
           throw new Error('Forbidden');
         }
 
-        const pipelineDir = process.env.PIPELINE_DIR ?? '/app/pipeline';
+        const pipelineDir = '/home/ubuntu/ferrari-pipeline';
         const scriptPath = path.join(pipelineDir, 'smart_pipeline.py');
 
         if (!fs.existsSync(scriptPath)) {
@@ -431,7 +431,7 @@ export const appRouter = router({
         if (!configuredSecret || input.secret !== configuredSecret) {
           throw new Error('Unauthorized');
         }
-        const pipelineDir = process.env.PIPELINE_DIR ?? '/app/pipeline';
+        const pipelineDir = '/home/ubuntu/ferrari-pipeline';
         const scriptPath = path.join(pipelineDir, 'smart_pipeline.py');
         if (!fs.existsSync(scriptPath)) {
           throw new Error('Pipeline script not found at ' + scriptPath);
@@ -478,7 +478,7 @@ export const appRouter = router({
           throw new Error('Forbidden');
         }
         // Safety: only allow files inside the pipeline logs directory
-        const logsDir = path.join(process.env.PIPELINE_DIR ?? '/app/pipeline', 'logs');
+        const logsDir = '/home/ubuntu/ferrari-pipeline/logs';
         const resolved = path.resolve(input.logFile);
         if (!resolved.startsWith(logsDir)) {
           throw new Error('Access denied: log file must be inside the pipeline logs directory');

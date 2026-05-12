@@ -72,7 +72,7 @@ async function startServer() {
     }
     const phase: string = (req.body?.phase as string) || "all";
     const dryRun: boolean = Boolean(req.body?.dryRun);
-    const pipelineDir = process.env.PIPELINE_DIR ?? "/app/pipeline";
+    const pipelineDir = "/home/ubuntu/ferrari-pipeline";
     const scriptPath = path.join(pipelineDir, "smart_pipeline.py");
     if (!fs.existsSync(scriptPath)) {
       return res.status(503).json({ error: `Pipeline script not found at ${scriptPath}` });

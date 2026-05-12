@@ -947,3 +947,14 @@
 - [ ] Add historical data note/placeholder for future "Sold Archive" page
 - [ ] Direction B homepage redesign with live-only data
 - [ ] Twice-daily cron job for all 11 models
+
+## Live Data Migration — May 2026
+- [x] Migrate F8TributoReport.tsx to live data (useLiveListings + ReportDataCtx)
+- [x] Migrate Ferrari458Report.tsx to live data (useLiveListings + ReportDataCtx)
+- [x] Migrate Ferrari812GTSReport.tsx to live data (useLiveListings + ReportDataCtx)
+- [x] Remove dead static imports from Home.tsx (CARS_BY_RANK, CARS, STATIC_MARKET_STATS)
+- [x] Fix Tom Hartley duplicate key in dealer_registry.py (Jnr vs Senior)
+- [x] Fix ferrariPortofino.ts truncated string TypeScript errors (19 errors — confirmed phantom watcher cache, tsc passes 0 errors)
+- [x] Migrate Compare.tsx to live tRPC data (useLiveListings hook)
+- [x] Migrate Watchlist.tsx to live tRPC data (trpc.listings.allActive)
+- [x] Add last-refreshed timestamp to all report page hero sections (ReportGate + live marketStats)
